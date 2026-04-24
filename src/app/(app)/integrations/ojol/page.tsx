@@ -193,14 +193,18 @@ function ChannelConfigDialog({
             </div>
             <Switch checked={isConnected} onCheckedChange={setIsConnected} />
           </div>
-          <div className="flex items-center justify-between rounded-md border p-3">
+          <div className="flex items-center justify-between rounded-md border p-3 opacity-60">
             <div>
-              <p className="text-sm font-medium">Auto-sync</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-medium">Auto-sync</p>
+                <Badge variant="outline">Segera Hadir</Badge>
+              </div>
               <p className="text-xs text-muted-foreground">
                 Perubahan menu/harga dari backoffice otomatis di-push ke platform.
+                Fitur belum aktif — sync masih manual.
               </p>
             </div>
-            <Switch checked={autoSync} onCheckedChange={setAutoSync} />
+            <Switch checked={autoSync} onCheckedChange={setAutoSync} disabled />
           </div>
           <div className="space-y-2">
             <Label>Catatan (opsional)</Label>
@@ -352,13 +356,9 @@ function ListingEditDialog({
 function ChannelCard({
   channel,
   pendingCount,
-  onSync,
-  isSyncing,
 }: {
   channel: OjolChannel;
   pendingCount: number;
-  onSync: () => void;
-  isSyncing: boolean;
 }) {
   return (
     <Card>
@@ -417,18 +417,22 @@ function ChannelCard({
             {pendingCount} item menunggu sync
           </p>
         ) : null}
+        {/*
+         * Sync action sengaja di-block sampai integrasi marketplace API jadi.
+         * Channel config + listing override masih bisa di-edit manual; tombol
+         * di-disable & diberi label supaya operator tahu fitur belum siap.
+         */}
         <Button
           className="w-full"
-          variant={channel.is_connected ? "default" : "outline"}
-          disabled={!channel.is_connected || isSyncing}
-          onClick={onSync}
+          variant="outline"
+          disabled
+          title="Fitur sync ke platform belum tersedia"
         >
-          {isSyncing ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <RefreshCw className="h-4 w-4" />
-          )}
+          <RefreshCw className="h-4 w-4" />
           Sync Sekarang
+          <Badge variant="outline" className="ml-2">
+            Segera Hadir
+          </Badge>
         </Button>
       </CardContent>
     </Card>
@@ -476,18 +480,9 @@ export default function OjolIntegrationPage() {
     enabled: !!outletId,
   });
 
-  const syncMutation = useMutation({
-    mutationFn: (platform: OjolPlatform) =>
-      ojolApi.triggerSync({ outlet_id: outletId!, platform }),
-    onSuccess: (log) => {
-      toast.success(
-        `Sync ${OJOL_PLATFORM_LABEL[log.platform]} selesai — ${log.items_synced} item`,
-      );
-      qc.invalidateQueries({ queryKey: ["ojol"] });
-    },
-    onError: (err) =>
-      toast.error(err instanceof Error ? err.message : "Sync gagal"),
-  });
+  // Sync ke platform marketplace masih dimatikan — lihat ChannelCard. Setelah
+  // integrasi API GoFood/GrabFood/ShopeeFood siap, balikkan `useMutation` di
+  // sini dan teruskan ke `<ChannelCard onSync={...} isSyncing={...} />`.
 
   const pendingByPlatform = useMemo(() => {
     const map: Record<OjolPlatform, number> = {
@@ -547,6 +542,13 @@ export default function OjolIntegrationPage() {
         }
       />
 
+      <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-200">
+        <span className="font-medium">Segera Hadir:</span> sync otomatis ke
+        GoFood/GrabFood/ShopeeFood masih dalam pengembangan. Konfigurasi
+        channel dan harga override sudah bisa di-edit; perubahan akan
+        ter-push setelah integrasi API marketplace tersedia.
+      </div>
+
       <div className="grid gap-4 md:grid-cols-3">
         {PLATFORMS.map((p) => {
           const ch = channels.find((c) => c.platform === p);
@@ -556,10 +558,6 @@ export default function OjolIntegrationPage() {
               key={p}
               channel={ch}
               pendingCount={pendingByPlatform[p]}
-              onSync={() => syncMutation.mutate(p)}
-              isSyncing={
-                syncMutation.isPending && syncMutation.variables === p
-              }
             />
           );
         })}

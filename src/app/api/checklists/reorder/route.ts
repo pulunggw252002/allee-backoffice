@@ -5,7 +5,7 @@
  */
 import { and, eq } from "drizzle-orm";
 import { z } from "zod";
-import { db, schema, sqlite } from "@/server/db/client";
+import { db, schema } from "@/server/db/client";
 import { requireRole, requireSession } from "@/server/auth/session";
 import { handle, readJson } from "@/server/api/helpers";
 import { logAudit } from "@/server/api/audit";
@@ -30,10 +30,11 @@ export async function POST(req: Request) {
 
     // Whole-list reorder in one transaction — partial rewrites leave the
     // checklist in a state where two items share the same sort_order.
-    sqlite.transaction(() => {
+    await db.transaction(async (tx) => {
       for (let idx = 0; idx < input.ordered_ids.length; idx++) {
         const id = input.ordered_ids[idx];
-        db.update(schema.checklist_templates)
+        await tx
+          .update(schema.checklist_templates)
           .set({ sort_order: idx })
           .where(
             and(
@@ -41,10 +42,9 @@ export async function POST(req: Request) {
               eq(schema.checklist_templates.station, input.station),
               eq(schema.checklist_templates.type, input.type),
             ),
-          )
-          .run();
+          );
       }
-    })();
+    });
 
     await logAudit(session, {
       action: "update",

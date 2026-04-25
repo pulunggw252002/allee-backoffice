@@ -2,13 +2,13 @@
 
 Web backoffice untuk sistem POS ALLEE — kelola menu, resep, inventory, outlet,
 user, integrasi ojol, dan reporting. Frontend: Next.js 15 (App Router) +
-TypeScript. Backend: Next.js API routes + Drizzle ORM + better-sqlite3 +
+TypeScript. Backend: Next.js API routes + Drizzle ORM + libSQL/Turso +
 Better Auth.
 
 Backoffice ini di-pair dengan aplikasi POS ALLEE (terpisah). Keduanya berbagi
-SQLite DB yang sama lewat `DATABASE_URL`, sehingga staff bisa login ke POS
-pakai PIN yang di-set Owner di sini, dan transaksi di POS langsung muncul di
-dashboard backoffice tanpa sync layer tambahan.
+DB libSQL yang sama (file lokal saat dev, Turso saat production), sehingga
+staff bisa login ke POS pakai PIN yang di-set Owner di sini, dan transaksi
+di POS langsung muncul di dashboard backoffice tanpa sync layer tambahan.
 
 ## Stack
 
@@ -19,7 +19,7 @@ dashboard backoffice tanpa sync layer tambahan.
 | Data fetching | TanStack Query |
 | Forms | react-hook-form + zod |
 | Auth | Better Auth (email + password, sign-up off) |
-| DB | better-sqlite3 + Drizzle ORM (migrations di `drizzle/`) |
+| DB | libSQL (`@libsql/client`) + Drizzle ORM — file lokal di dev, Turso di prod (lihat [`docs/deploy-turso.md`](docs/deploy-turso.md)) |
 | Charts | Recharts |
 | State | Zustand (auth + outlet selector) |
 

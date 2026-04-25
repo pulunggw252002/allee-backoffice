@@ -1,5 +1,5 @@
 /**
- * Database seed — writes every entity from the frontend mock into SQLite.
+ * Database seed — writes every entity from the frontend mock into libSQL.
  *
  * Run:  npm run db:seed
  *
@@ -12,14 +12,21 @@
  *   direct insert into `user_auth` + `account`, because we disable self-
  *   signup globally. Each domain user gets a synthetic email
  *   `<slug(name)>@allee.local` so login by name still works.
- * - Safe to re-run: we truncate every table first inside a transaction so
- *   you always get a clean DB without deleting the file.
+ * - Safe to re-run: we truncate every table first inside one libsql batch
+ *   so failure leaves the DB intact, regardless of file vs Turso.
+ *
+ * Works for both connection modes (auto-detected by `src/server/db/client.ts`):
+ *   - Local file (DATABASE_URL=file:...) — instant, single-process.
+ *   - Turso remote (TURSO_DATABASE_URL + TURSO_AUTH_TOKEN) — slower (each
+ *     statement = HTTP round trip), but supports any region. Saat seed
+ *     production, jangan kaget kalau makan 1–2 menit.
  */
 
-import "dotenv/config";
-import { db, schema, sqlite } from "../src/server/db/client";
+import "./_env";
+import { db, schema, client } from "../src/server/db/client";
 import { auth } from "../src/server/auth";
 import { buildSeed, DEMO_USER_PASSWORD } from "../src/lib/mock/seed";
+import type { SQLiteTable } from "drizzle-orm/sqlite-core";
 
 function slugify(name: string): string {
   return name
@@ -33,58 +40,84 @@ function emailFor(name: string): string {
   return `${slugify(name)}@allee.local`;
 }
 
+/**
+ * Chunked multi-row insert.
+ *
+ * Drizzle's `.values([...])` compiles to a single multi-row `INSERT`, so this
+ * collapses N inserts into ⌈N / chunkSize⌉ round-trips. Critical when the DB
+ * lives in Tokyo and round-trip latency dominates.
+ *
+ * Chunk size kept conservative (200) to stay well under libsql's per-statement
+ * size limit; raise if you profile and want fewer batches.
+ */
+async function bulkInsert<T extends SQLiteTable, V>(
+  table: T,
+  rows: V[],
+  chunkSize = 200,
+): Promise<void> {
+  if (rows.length === 0) return;
+  for (let i = 0; i < rows.length; i += chunkSize) {
+    const slice = rows.slice(i, i + chunkSize);
+    // Drizzle types want non-empty array — we already early-returned for 0.
+    await db.insert(table).values(slice as never);
+  }
+}
+
+// Order matters: child tables before parents to avoid FK violations during
+// truncate. The libsql batch runs in a single transaction — semua atau gagal
+// bersama, never partial.
+const TRUNCATE_ORDER = [
+  "transaction_item_addons",
+  "transaction_items",
+  "transactions",
+  "stock_movements",
+  "stock_opname_items",
+  "stock_opnames",
+  "ingredient_batches",
+  "recipe_items",
+  "menu_addon_groups",
+  "menu_outlets",
+  "bundle_items",
+  "bundle_outlets",
+  "bundles",
+  "addon_recipe_modifiers",
+  "addon_options",
+  "addon_groups",
+  "discounts",
+  "ojol_sync_logs",
+  "menu_channel_listings",
+  "ojol_channels",
+  "menus",
+  "menu_categories",
+  "ingredients",
+  "audit_logs",
+  "attendance",
+  "checklist_templates",
+  "sales_targets",
+  "tax_settings",
+  "attendance_settings",
+  "account",
+  "session",
+  "verification",
+  "user_auth",
+  "users",
+  "outlets",
+];
+
 async function main() {
   console.log("[seed] loading mock payload…");
   const data = buildSeed();
 
   console.log("[seed] truncating tables…");
-  // Order matters: FKs cascade mostly, but truncating children first avoids
-  // busy-waits on WAL. Keep in a transaction so failure leaves DB intact.
-  const truncate = sqlite.transaction(() => {
-    sqlite.exec("DELETE FROM transaction_item_addons;");
-    sqlite.exec("DELETE FROM transaction_items;");
-    sqlite.exec("DELETE FROM transactions;");
-    sqlite.exec("DELETE FROM stock_movements;");
-    sqlite.exec("DELETE FROM stock_opname_items;");
-    sqlite.exec("DELETE FROM stock_opnames;");
-    sqlite.exec("DELETE FROM ingredient_batches;");
-    sqlite.exec("DELETE FROM recipe_items;");
-    sqlite.exec("DELETE FROM menu_addon_groups;");
-    sqlite.exec("DELETE FROM menu_outlets;");
-    sqlite.exec("DELETE FROM bundle_items;");
-    sqlite.exec("DELETE FROM bundle_outlets;");
-    sqlite.exec("DELETE FROM bundles;");
-    sqlite.exec("DELETE FROM addon_recipe_modifiers;");
-    sqlite.exec("DELETE FROM addon_options;");
-    sqlite.exec("DELETE FROM addon_groups;");
-    sqlite.exec("DELETE FROM discounts;");
-    // Ojol tables reference menus/outlets, so purge them before we nuke the
-    // parents. `ojol_sync_logs` has no seed content today but we still wipe
-    // it so demo re-seeds don't accumulate stale run history.
-    sqlite.exec("DELETE FROM ojol_sync_logs;");
-    sqlite.exec("DELETE FROM menu_channel_listings;");
-    sqlite.exec("DELETE FROM ojol_channels;");
-    sqlite.exec("DELETE FROM menus;");
-    sqlite.exec("DELETE FROM menu_categories;");
-    sqlite.exec("DELETE FROM ingredients;");
-    sqlite.exec("DELETE FROM audit_logs;");
-    sqlite.exec("DELETE FROM attendance;");
-    sqlite.exec("DELETE FROM checklist_templates;");
-    sqlite.exec("DELETE FROM sales_targets;");
-    sqlite.exec("DELETE FROM tax_settings;");
-    sqlite.exec("DELETE FROM attendance_settings;");
-    sqlite.exec("DELETE FROM account;");
-    sqlite.exec("DELETE FROM session;");
-    sqlite.exec("DELETE FROM verification;");
-    sqlite.exec("DELETE FROM user_auth;");
-    sqlite.exec("DELETE FROM users;");
-    sqlite.exec("DELETE FROM outlets;");
-  });
-  truncate();
+  await client.batch(
+    TRUNCATE_ORDER.map((table) => `DELETE FROM ${table};`),
+    "write",
+  );
 
   console.log("[seed] inserting outlets…");
-  for (const o of data.outlets) {
-    await db.insert(schema.outlets).values({
+  await bulkInsert(
+    schema.outlets,
+    data.outlets.map((o) => ({
       id: o.id,
       name: o.name,
       address: o.address,
@@ -93,12 +126,13 @@ async function main() {
       opening_hours: o.opening_hours,
       is_active: o.is_active,
       created_at: o.created_at,
-    });
-  }
+    })),
+  );
 
   console.log("[seed] inserting users…");
-  for (const u of data.users) {
-    await db.insert(schema.users).values({
+  await bulkInsert(
+    schema.users,
+    data.users.map((u) => ({
       id: u.id,
       name: u.name,
       role: u.role,
@@ -106,50 +140,63 @@ async function main() {
       contact: u.contact ?? null,
       is_active: u.is_active,
       joined_at: u.joined_at,
-    });
-  }
+    })),
+  );
 
   console.log("[seed] creating Better Auth identities…");
   const ctx = await auth.$context;
   const hash = ctx.password.hash;
   const now = new Date();
-  for (const u of data.users) {
-    const email = emailFor(u.name);
-    const authId = `au_${u.id}`;
-    const hashed = await hash(DEMO_USER_PASSWORD);
-    await db.insert(schema.user_auth).values({
-      id: authId,
-      name: u.name,
-      email,
-      emailVerified: true,
-      image: null,
-      createdAt: now,
-      updatedAt: now,
-      domain_user_id: u.id,
-    });
-    await db.insert(schema.account).values({
-      id: `ac_${u.id}`,
-      accountId: authId,
-      providerId: "credential",
-      userId: authId,
-      password: hashed,
-      createdAt: now,
-      updatedAt: now,
-    });
-  }
+  // Hash passwords in parallel — bcrypt-ish work is CPU-bound and small (≈7 users).
+  const authRows = await Promise.all(
+    data.users.map(async (u) => {
+      const hashed = await hash(DEMO_USER_PASSWORD);
+      return {
+        userAuth: {
+          id: `au_${u.id}`,
+          name: u.name,
+          email: emailFor(u.name),
+          emailVerified: true,
+          image: null,
+          createdAt: now,
+          updatedAt: now,
+          domain_user_id: u.id,
+        },
+        account: {
+          id: `ac_${u.id}`,
+          accountId: `au_${u.id}`,
+          providerId: "credential",
+          userId: `au_${u.id}`,
+          password: hashed,
+          createdAt: now,
+          updatedAt: now,
+        },
+      };
+    }),
+  );
+  await bulkInsert(
+    schema.user_auth,
+    authRows.map((r) => r.userAuth),
+  );
+  await bulkInsert(
+    schema.account,
+    authRows.map((r) => r.account),
+  );
 
   console.log("[seed] inserting menu categories…");
-  for (const c of data.categories) {
-    await db.insert(schema.menu_categories).values({
+  await bulkInsert(
+    schema.menu_categories,
+    data.categories.map((c) => ({
       id: c.id,
       name: c.name,
       sort_order: c.sort_order,
-    });
-  }
+    })),
+  );
 
   console.log("[seed] inserting ingredients…");
-  for (const i of data.ingredients) {
-    await db.insert(schema.ingredients).values({
+  await bulkInsert(
+    schema.ingredients,
+    data.ingredients.map((i) => ({
       id: i.id,
       outlet_id: i.outlet_id,
       name: i.name,
@@ -159,12 +206,13 @@ async function main() {
       min_qty: i.min_qty,
       storage_location: i.storage_location ?? null,
       updated_at: i.updated_at,
-    });
-  }
+    })),
+  );
 
   console.log("[seed] inserting menus + recipe…");
-  for (const m of data.menus) {
-    await db.insert(schema.menus).values({
+  await bulkInsert(
+    schema.menus,
+    data.menus.map((m) => ({
       id: m.id,
       category_id: m.category_id,
       name: m.name,
@@ -175,83 +223,93 @@ async function main() {
       description: m.description ?? null,
       type: m.type,
       is_active: m.is_active,
-    });
-    for (const oid of m.outlet_ids) {
-      await db
-        .insert(schema.menu_outlets)
-        .values({ menu_id: m.id, outlet_id: oid });
-    }
-  }
-  for (const r of data.recipes) {
-    await db.insert(schema.recipe_items).values({
+    })),
+  );
+  await bulkInsert(
+    schema.menu_outlets,
+    data.menus.flatMap((m) =>
+      m.outlet_ids.map((oid) => ({ menu_id: m.id, outlet_id: oid })),
+    ),
+  );
+  await bulkInsert(
+    schema.recipe_items,
+    data.recipes.map((r) => ({
       id: r.id,
       menu_id: r.menu_id,
       ingredient_id: r.ingredient_id,
       quantity: r.quantity,
       notes: r.notes ?? null,
-    });
-  }
+    })),
+  );
 
   console.log("[seed] inserting add-ons…");
-  for (const g of data.addon_groups) {
-    await db.insert(schema.addon_groups).values({
+  await bulkInsert(
+    schema.addon_groups,
+    data.addon_groups.map((g) => ({
       id: g.id,
       name: g.name,
       selection_type: g.selection_type,
       is_required: g.is_required,
-    });
-  }
-  for (const o of data.addon_options) {
-    await db.insert(schema.addon_options).values({
+    })),
+  );
+  await bulkInsert(
+    schema.addon_options,
+    data.addon_options.map((o) => ({
       id: o.id,
       addon_group_id: o.addon_group_id,
       name: o.name,
       extra_price: o.extra_price,
-    });
-  }
-  for (const m of data.addon_recipe_modifiers) {
-    await db.insert(schema.addon_recipe_modifiers).values({
+    })),
+  );
+  await bulkInsert(
+    schema.addon_recipe_modifiers,
+    data.addon_recipe_modifiers.map((m) => ({
       id: m.id,
       addon_option_id: m.addon_option_id,
       ingredient_id: m.ingredient_id,
       quantity_delta: m.quantity_delta,
       mode: m.mode,
-    });
-  }
-  for (const mag of data.menu_addon_groups) {
-    await db.insert(schema.menu_addon_groups).values({
+    })),
+  );
+  await bulkInsert(
+    schema.menu_addon_groups,
+    data.menu_addon_groups.map((mag) => ({
       menu_id: mag.menu_id,
       addon_group_id: mag.addon_group_id,
-    });
-  }
+    })),
+  );
 
   console.log("[seed] inserting bundles…");
-  for (const b of data.bundles) {
-    await db.insert(schema.bundles).values({
+  await bulkInsert(
+    schema.bundles,
+    data.bundles.map((b) => ({
       id: b.id,
       name: b.name,
       price: b.price,
       is_active: b.is_active,
       photo_url: b.photo_url ?? null,
       description: b.description ?? null,
-    });
-    for (const oid of b.outlet_ids) {
-      await db
-        .insert(schema.bundle_outlets)
-        .values({ bundle_id: b.id, outlet_id: oid });
-    }
-  }
-  for (const bi of data.bundle_items) {
-    await db.insert(schema.bundle_items).values({
+    })),
+  );
+  await bulkInsert(
+    schema.bundle_outlets,
+    data.bundles.flatMap((b) =>
+      b.outlet_ids.map((oid) => ({ bundle_id: b.id, outlet_id: oid })),
+    ),
+  );
+  await bulkInsert(
+    schema.bundle_items,
+    data.bundle_items.map((bi) => ({
       bundle_id: bi.bundle_id,
       menu_id: bi.menu_id,
       quantity: bi.quantity,
-    });
-  }
+    })),
+  );
 
   console.log("[seed] inserting discounts…");
-  for (const d of data.discounts) {
-    await db.insert(schema.discounts).values({
+  await bulkInsert(
+    schema.discounts,
+    data.discounts.map((d) => ({
       id: d.id,
       name: d.name,
       type: d.type,
@@ -263,99 +321,81 @@ async function main() {
       active_hour_start: d.active_hour_start ?? null,
       active_hour_end: d.active_hour_end ?? null,
       is_active: d.is_active,
-    });
-  }
+    })),
+  );
 
   console.log(`[seed] inserting ${data.transactions.length} transactions…`);
-  const txInsert = sqlite.transaction(() => {
-    for (const t of data.transactions) {
-      sqlite
-        .prepare(
-          `INSERT INTO transactions (id, outlet_id, user_id, subtotal, discount_total, ppn_amount, service_charge_amount, grand_total, payment_method, status, order_type, created_at, void_reason, voided_by, voided_at)
-           VALUES (@id,@outlet_id,@user_id,@subtotal,@discount_total,@ppn_amount,@service_charge_amount,@grand_total,@payment_method,@status,@order_type,@created_at,@void_reason,@voided_by,@voided_at)`,
-        )
-        .run({
-          id: t.id,
-          outlet_id: t.outlet_id,
-          user_id: t.user_id,
-          subtotal: t.subtotal,
-          discount_total: t.discount_total,
-          ppn_amount: t.ppn_amount,
-          service_charge_amount: t.service_charge_amount,
-          grand_total: t.grand_total,
-          payment_method: t.payment_method,
-          status: t.status,
-          order_type: t.order_type,
-          created_at: t.created_at,
-          void_reason: t.void_reason ?? null,
-          voided_by: t.voided_by ?? null,
-          voided_at: t.voided_at ?? null,
-        });
-      for (const it of t.items) {
-        sqlite
-          .prepare(
-            `INSERT INTO transaction_items (id, transaction_id, menu_id, bundle_id, name_snapshot, quantity, unit_price, hpp_snapshot, subtotal)
-             VALUES (@id,@transaction_id,@menu_id,@bundle_id,@name_snapshot,@quantity,@unit_price,@hpp_snapshot,@subtotal)`,
-          )
-          .run({
-            id: it.id,
-            transaction_id: it.transaction_id,
-            menu_id: it.menu_id,
-            bundle_id: it.bundle_id,
-            name_snapshot: it.name_snapshot,
-            quantity: it.quantity,
-            unit_price: it.unit_price,
-            hpp_snapshot: it.hpp_snapshot,
-            subtotal: it.subtotal,
-          });
-        for (const a of it.addons) {
-          sqlite
-            .prepare(
-              `INSERT INTO transaction_item_addons (id, transaction_item_id, addon_option_id, name_snapshot, extra_price)
-               VALUES (@id,@transaction_item_id,@addon_option_id,@name_snapshot,@extra_price)`,
-            )
-            .run({
-              id: a.id,
-              transaction_item_id: a.transaction_item_id,
-              addon_option_id: a.addon_option_id,
-              name_snapshot: a.name_snapshot,
-              extra_price: a.extra_price,
-            });
-        }
-      }
-    }
-  });
-  txInsert();
+  // Flatten 3 levels (transaction → items → addons) into 3 arrays so we can
+  // bulk-insert each with a single round-trip per chunk. FK ordering is
+  // preserved because parents go in before children.
+  const txRows = data.transactions.map((t) => ({
+    id: t.id,
+    outlet_id: t.outlet_id,
+    user_id: t.user_id,
+    subtotal: t.subtotal,
+    discount_total: t.discount_total,
+    ppn_amount: t.ppn_amount,
+    service_charge_amount: t.service_charge_amount,
+    grand_total: t.grand_total,
+    payment_method: t.payment_method,
+    status: t.status,
+    order_type: t.order_type,
+    created_at: t.created_at,
+    void_reason: t.void_reason ?? null,
+    voided_by: t.voided_by ?? null,
+    voided_at: t.voided_at ?? null,
+  }));
+  const itemRows = data.transactions.flatMap((t) =>
+    t.items.map((it) => ({
+      id: it.id,
+      transaction_id: it.transaction_id,
+      menu_id: it.menu_id,
+      bundle_id: it.bundle_id,
+      name_snapshot: it.name_snapshot,
+      quantity: it.quantity,
+      unit_price: it.unit_price,
+      hpp_snapshot: it.hpp_snapshot,
+      subtotal: it.subtotal,
+    })),
+  );
+  const addonRows = data.transactions.flatMap((t) =>
+    t.items.flatMap((it) =>
+      it.addons.map((a) => ({
+        id: a.id,
+        transaction_item_id: a.transaction_item_id,
+        addon_option_id: a.addon_option_id,
+        name_snapshot: a.name_snapshot,
+        extra_price: a.extra_price,
+      })),
+    ),
+  );
+  await bulkInsert(schema.transactions, txRows);
+  await bulkInsert(schema.transaction_items, itemRows);
+  await bulkInsert(schema.transaction_item_addons, addonRows);
 
   console.log(
     `[seed] inserting ${data.stock_movements.length} stock movements…`,
   );
-  const movInsert = sqlite.transaction(() => {
-    for (const m of data.stock_movements) {
-      sqlite
-        .prepare(
-          `INSERT INTO stock_movements (id, ingredient_id, outlet_id, transaction_id, batch_id, type, quantity, notes, user_id, created_at)
-           VALUES (@id,@ingredient_id,@outlet_id,@transaction_id,@batch_id,@type,@quantity,@notes,@user_id,@created_at)`,
-        )
-        .run({
-          id: m.id,
-          ingredient_id: m.ingredient_id,
-          outlet_id: m.outlet_id,
-          transaction_id: m.transaction_id ?? null,
-          batch_id: m.batch_id ?? null,
-          type: m.type,
-          quantity: m.quantity,
-          notes: m.notes ?? null,
-          user_id: m.user_id,
-          created_at: m.created_at,
-        });
-    }
-  });
-  movInsert();
+  await bulkInsert(
+    schema.stock_movements,
+    data.stock_movements.map((m) => ({
+      id: m.id,
+      ingredient_id: m.ingredient_id,
+      outlet_id: m.outlet_id,
+      transaction_id: m.transaction_id ?? null,
+      batch_id: m.batch_id ?? null,
+      type: m.type,
+      quantity: m.quantity,
+      notes: m.notes ?? null,
+      user_id: m.user_id,
+      created_at: m.created_at,
+    })),
+  );
 
   console.log("[seed] inserting audit logs…");
-  for (const a of data.audit_logs) {
-    await db.insert(schema.audit_logs).values({
+  await bulkInsert(
+    schema.audit_logs,
+    data.audit_logs.map((a) => ({
       id: a.id,
       user_id: a.user_id,
       user_name: a.user_name,
@@ -368,21 +408,23 @@ async function main() {
       changes: a.changes,
       notes: a.notes ?? null,
       created_at: a.created_at,
-    });
-  }
+    })),
+  );
 
   console.log("[seed] inserting attendance + checklists…");
-  for (const t of data.checklist_templates) {
-    await db.insert(schema.checklist_templates).values({
+  await bulkInsert(
+    schema.checklist_templates,
+    data.checklist_templates.map((t) => ({
       id: t.id,
       station: t.station,
       type: t.type,
       label: t.label,
       sort_order: t.sort_order,
-    });
-  }
-  for (const a of data.attendances) {
-    await db.insert(schema.attendance).values({
+    })),
+  );
+  await bulkInsert(
+    schema.attendance,
+    data.attendances.map((a) => ({
       id: a.id,
       user_id: a.user_id,
       user_name: a.user_name,
@@ -401,8 +443,8 @@ async function main() {
       check_out_station_photo: a.check_out_station_photo ?? null,
       after_checklist: a.after_checklist ?? null,
       check_out_notes: a.check_out_notes ?? null,
-    });
-  }
+    })),
+  );
 
   console.log("[seed] inserting settings + sales targets…");
   await db.insert(schema.attendance_settings).values({
@@ -416,20 +458,22 @@ async function main() {
     service_charge_percent: data.tax_settings.service_charge_percent,
     updated_at: data.tax_settings.updated_at,
   });
-  for (const t of data.sales_targets) {
-    await db.insert(schema.sales_targets).values({
+  await bulkInsert(
+    schema.sales_targets,
+    data.sales_targets.map((t) => ({
       id: t.id,
       year: t.year,
       month: t.month,
       target_amount: t.target_amount,
       updated_at: t.updated_at,
-    });
-  }
+    })),
+  );
 
   // ─── Ojol integration ─────────────────────────────────────────────────
   console.log("[seed] inserting ojol channels + menu listings…");
-  for (const c of data.ojol_channels) {
-    await db.insert(schema.ojol_channels).values({
+  await bulkInsert(
+    schema.ojol_channels,
+    data.ojol_channels.map((c) => ({
       id: c.id,
       outlet_id: c.outlet_id,
       platform: c.platform,
@@ -440,10 +484,11 @@ async function main() {
       auto_sync: c.auto_sync,
       last_sync_at: c.last_sync_at ?? null,
       notes: c.notes ?? null,
-    });
-  }
-  for (const l of data.menu_channel_listings) {
-    await db.insert(schema.menu_channel_listings).values({
+    })),
+  );
+  await bulkInsert(
+    schema.menu_channel_listings,
+    data.menu_channel_listings.map((l) => ({
       id: l.id,
       menu_id: l.menu_id,
       platform: l.platform,
@@ -453,8 +498,8 @@ async function main() {
       last_sync_at: l.last_sync_at ?? null,
       sync_error: l.sync_error ?? null,
       external_id: l.external_id ?? null,
-    });
-  }
+    })),
+  );
 
   console.log("[seed] ✓ done. Demo password for every user: 'password'.");
   console.log("[seed]   email format: <name-slug>@allee.local");

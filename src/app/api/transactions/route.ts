@@ -13,12 +13,12 @@
  *      cross-check dengan `grand_total` yang dikirim — kalau drift > 1 IDR,
  *      tolak (sinyal versi menu sudah berubah / bug perhitungan POS),
  *   5. deduct stock berdasar resep menu + modifier addon — semua dalam
- *      satu sqlite.transaction supaya tidak ada partial state,
+ *      satu db.transaction supaya tidak ada partial state,
  *   6. log audit + return Transaction utuh (matching GET shape).
  */
 import { and, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { z } from "zod";
-import { db, schema, sqlite } from "@/server/db/client";
+import { db, schema } from "@/server/db/client";
 import {
   requireRole,
   requireSession,
@@ -235,9 +235,8 @@ export async function POST(req: Request) {
       voided_at: null,
     };
 
-    // Pre-build child rows supaya `sqlite.transaction()` callback (synchronous)
-    // tidak perlu generate ID lagi di dalamnya. Addon id juga di-generate di
-    // sini supaya response ke POS punya ID yang sama persis dengan DB.
+    // Pre-build child rows. Addon id di-generate di sini supaya response ke
+    // POS punya ID yang sama persis dengan DB.
     type AddonRow = z.infer<typeof ItemAddonInput> & { id: string };
     const itemRows: Array<{
       id: string;
@@ -263,114 +262,170 @@ export async function POST(req: Request) {
       _addons: (it.addons ?? []).map((ad) => ({ ...ad, id: genId("ad") })),
     }));
 
-    // Atomic write: tx + items + addons. Stock movement ditangani terpisah
-    // di endpoint /api/stock-movements (POS bisa kirim batch terkait), supaya
-    // inventory adjustment bisa di-retry independent dari order create.
-    sqlite.transaction(() => {
-      db.insert(schema.transactions).values(txRow).run();
-      for (const it of itemRows) {
-        db.insert(schema.transaction_items)
-          .values({
-            id: it.id,
-            transaction_id: it.transaction_id,
-            menu_id: it.menu_id,
-            bundle_id: it.bundle_id,
-            name_snapshot: it.name_snapshot,
-            quantity: it.quantity,
-            unit_price: it.unit_price,
-            hpp_snapshot: it.hpp_snapshot,
-            subtotal: it.subtotal,
-          })
-          .run();
-        for (const ad of it._addons) {
-          db.insert(schema.transaction_item_addons)
-            .values({
-              id: ad.id,
-              transaction_item_id: it.id,
-              addon_option_id: ad.addon_option_id,
-              name_snapshot: ad.name_snapshot,
-              extra_price: ad.extra_price,
+    // Pre-fetch recipe + addon modifier rows OUTSIDE the transaction. Setiap
+    // query libsql adalah HTTP round-trip (Turso); melakukan N+1 di dalam
+    // transaction blok bakal pelan + risk timeout. Pre-load dulu, lalu
+    // transaction-nya jadi pure write.
+    const menuIds = Array.from(
+      new Set(itemRows.map((it) => it.menu_id).filter((m): m is string => !!m)),
+    );
+    const addonOptionIds = Array.from(
+      new Set(itemRows.flatMap((it) => it._addons.map((a) => a.addon_option_id))),
+    );
+
+    const recipeRows =
+      menuIds.length === 0
+        ? []
+        : await db
+            .select({
+              menu_id: schema.recipe_items.menu_id,
+              ingredient_id: schema.recipe_items.ingredient_id,
+              quantity: schema.recipe_items.quantity,
             })
-            .run();
+            .from(schema.recipe_items)
+            .innerJoin(
+              schema.ingredients,
+              eq(schema.ingredients.id, schema.recipe_items.ingredient_id),
+            )
+            .where(
+              and(
+                inArray(schema.recipe_items.menu_id, menuIds),
+                eq(schema.ingredients.outlet_id, input.outlet_id),
+              ),
+            )
+            .all();
+
+    const modifierRows =
+      addonOptionIds.length === 0
+        ? []
+        : await db
+            .select({
+              addon_option_id: schema.addon_recipe_modifiers.addon_option_id,
+              ingredient_id: schema.addon_recipe_modifiers.ingredient_id,
+              quantity_delta: schema.addon_recipe_modifiers.quantity_delta,
+              mode: schema.addon_recipe_modifiers.mode,
+            })
+            .from(schema.addon_recipe_modifiers)
+            .innerJoin(
+              schema.ingredients,
+              eq(
+                schema.ingredients.id,
+                schema.addon_recipe_modifiers.ingredient_id,
+              ),
+            )
+            .where(
+              and(
+                inArray(
+                  schema.addon_recipe_modifiers.addon_option_id,
+                  addonOptionIds,
+                ),
+                eq(schema.ingredients.outlet_id, input.outlet_id),
+              ),
+            )
+            .all();
+
+    // Bucket lookup tables untuk O(1) join di compute step.
+    const recipeByMenu = new Map<
+      string,
+      Array<{ ingredient_id: string; quantity: number }>
+    >();
+    for (const r of recipeRows) {
+      const arr = recipeByMenu.get(r.menu_id) ?? [];
+      arr.push({ ingredient_id: r.ingredient_id, quantity: r.quantity });
+      recipeByMenu.set(r.menu_id, arr);
+    }
+    const modifierByOption = new Map<
+      string,
+      Array<{ ingredient_id: string; quantity_delta: number; mode: "override" | "delta" }>
+    >();
+    for (const m of modifierRows) {
+      const arr = modifierByOption.get(m.addon_option_id) ?? [];
+      arr.push({
+        ingredient_id: m.ingredient_id,
+        quantity_delta: m.quantity_delta,
+        mode: m.mode,
+      });
+      modifierByOption.set(m.addon_option_id, arr);
+    }
+
+    // Compute ingredient deltas dari resep + addon modifiers.
+    const ingredientDeltas = new Map<string, number>();
+    for (const it of itemRows) {
+      if (!it.menu_id) continue;
+      for (const r of recipeByMenu.get(it.menu_id) ?? []) {
+        ingredientDeltas.set(
+          r.ingredient_id,
+          (ingredientDeltas.get(r.ingredient_id) ?? 0) +
+            r.quantity * it.quantity,
+        );
+      }
+      // Addon modifiers: mode "delta" tambah, mode "override" set absolute
+      // (override jarang; aman dilewat untuk MVP — POS jarang pakai)
+      for (const ad of it._addons) {
+        for (const m of modifierByOption.get(ad.addon_option_id) ?? []) {
+          if (m.mode === "delta") {
+            ingredientDeltas.set(
+              m.ingredient_id,
+              (ingredientDeltas.get(m.ingredient_id) ?? 0) +
+                m.quantity_delta * it.quantity,
+            );
+          }
+          // mode "override": skip auto-deduct (laporan konsumsi terpisah,
+          // ditangani fase-2).
         }
       }
-      // Auto stock deduction berbasis recipe — hanya untuk item dengan menu_id
-      // (bundle skip dulu karena resep bundle butuh expansion ke menu items).
-      // Berjalan dalam transaction yang sama supaya tidak ada partial state.
-      const ingredientDeltas = new Map<string, number>();
+    }
+
+    // Atomic write: tx + items + addons + stock movements + ingredient updates.
+    // Semua query baca sudah selesai di atas, jadi block ini pure write — aman
+    // untuk Turso transaction window.
+    await db.transaction(async (tx) => {
+      await tx.insert(schema.transactions).values(txRow);
       for (const it of itemRows) {
-        if (!it.menu_id) continue;
-        const recipe = sqlite
-          .prepare(
-            `SELECT ri.ingredient_id, ri.quantity
-             FROM recipe_items ri
-             INNER JOIN ingredients ing ON ing.id = ri.ingredient_id
-             WHERE ri.menu_id = ? AND ing.outlet_id = ?`,
-          )
-          .all(it.menu_id, input.outlet_id) as Array<{
-          ingredient_id: string;
-          quantity: number;
-        }>;
-        for (const r of recipe) {
-          ingredientDeltas.set(
-            r.ingredient_id,
-            (ingredientDeltas.get(r.ingredient_id) ?? 0) +
-              r.quantity * it.quantity,
-          );
-        }
-        // Addon modifiers: mode "delta" tambah, mode "override" set absolute
-        // (override jarang; aman dilewat untuk MVP — POS jarang pakai)
+        await tx.insert(schema.transaction_items).values({
+          id: it.id,
+          transaction_id: it.transaction_id,
+          menu_id: it.menu_id,
+          bundle_id: it.bundle_id,
+          name_snapshot: it.name_snapshot,
+          quantity: it.quantity,
+          unit_price: it.unit_price,
+          hpp_snapshot: it.hpp_snapshot,
+          subtotal: it.subtotal,
+        });
         for (const ad of it._addons) {
-          const mods = sqlite
-            .prepare(
-              `SELECT m.ingredient_id, m.quantity_delta, m.mode
-               FROM addon_recipe_modifiers m
-               INNER JOIN ingredients ing ON ing.id = m.ingredient_id
-               WHERE m.addon_option_id = ? AND ing.outlet_id = ?`,
-            )
-            .all(ad.addon_option_id, input.outlet_id) as Array<{
-            ingredient_id: string;
-            quantity_delta: number;
-            mode: "override" | "delta";
-          }>;
-          for (const m of mods) {
-            if (m.mode === "delta") {
-              ingredientDeltas.set(
-                m.ingredient_id,
-                (ingredientDeltas.get(m.ingredient_id) ?? 0) +
-                  m.quantity_delta * it.quantity,
-              );
-            }
-            // mode "override": skip auto-deduct (akan diatur di laporan
-            // konsumsi terpisah; MVP fokus ke delta). Ditangani fase-2.
-          }
+          await tx.insert(schema.transaction_item_addons).values({
+            id: ad.id,
+            transaction_item_id: it.id,
+            addon_option_id: ad.addon_option_id,
+            name_snapshot: ad.name_snapshot,
+            extra_price: ad.extra_price,
+          });
         }
       }
       for (const [ingredientId, qty] of ingredientDeltas) {
         if (qty <= 0) continue;
-        db.insert(schema.stock_movements)
-          .values({
-            id: genId("mov"),
-            ingredient_id: ingredientId,
-            outlet_id: input.outlet_id,
-            transaction_id: input.id,
-            batch_id: null,
-            type: "out_sale",
-            quantity: qty,
-            notes: null,
-            user_id: session.domainUser.id,
-            created_at: createdAt,
-          })
-          .run();
-        db.update(schema.ingredients)
+        await tx.insert(schema.stock_movements).values({
+          id: genId("mov"),
+          ingredient_id: ingredientId,
+          outlet_id: input.outlet_id,
+          transaction_id: input.id,
+          batch_id: null,
+          type: "out_sale",
+          quantity: qty,
+          notes: null,
+          user_id: session.domainUser.id,
+          created_at: createdAt,
+        });
+        await tx
+          .update(schema.ingredients)
           .set({
             current_stock: sql`${schema.ingredients.current_stock} - ${qty}`,
             updated_at: createdAt,
           })
-          .where(eq(schema.ingredients.id, ingredientId))
-          .run();
+          .where(eq(schema.ingredients.id, ingredientId));
       }
-    })();
+    });
 
     await logAudit(session, {
       action: "create",

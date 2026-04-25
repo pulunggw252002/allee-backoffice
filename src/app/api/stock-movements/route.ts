@@ -5,7 +5,7 @@
  */
 import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { db, schema, sqlite } from "@/server/db/client";
+import { db, schema } from "@/server/db/client";
 import {
   requireRole,
   requireSession,
@@ -98,16 +98,16 @@ export async function POST(req: Request) {
     // Insert the movement + update the stock in a single transaction so a
     // failure in the second statement doesn't leave the log and the actual
     // stock desynced.
-    sqlite.transaction(() => {
-      db.insert(schema.stock_movements).values(row).run();
-      db.update(schema.ingredients)
+    await db.transaction(async (tx) => {
+      await tx.insert(schema.stock_movements).values(row);
+      await tx
+        .update(schema.ingredients)
         .set({
           current_stock: sql`${schema.ingredients.current_stock} + ${delta}`,
           updated_at: nowIso(),
         })
-        .where(eq(schema.ingredients.id, input.ingredient_id))
-        .run();
-    })();
+        .where(eq(schema.ingredients.id, input.ingredient_id));
+    });
 
     await logAudit(session, {
       action: input.type === "in" ? "stock_in" : "stock_out",

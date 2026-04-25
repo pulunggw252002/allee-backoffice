@@ -5,7 +5,7 @@
  */
 import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { db, schema, sqlite } from "@/server/db/client";
+import { db, schema } from "@/server/db/client";
 import { requireRole, requireSession } from "@/server/auth/session";
 import { genId, handle, notFound, readJson } from "@/server/api/helpers";
 import { diffChanges, logAudit } from "@/server/api/audit";
@@ -83,44 +83,42 @@ export async function PATCH(req: Request, { params }: Ctx) {
     // Menu PATCH touches three tables (menus + menu_outlets + recipe_items)
     // and we replace outlet/recipe rows by delete-then-insert. If any step
     // fails mid-flight the menu would be left partially wired (e.g. new
-    // price saved but old recipe retained). Run the whole lot in one sqlite
+    // price saved but old recipe retained). Run the whole lot in one
     // transaction so either every write lands or none do.
-    sqlite.transaction(() => {
+    await db.transaction(async (tx) => {
       if (Object.keys(fields).length > 0) {
-        db.update(schema.menus)
+        await tx
+          .update(schema.menus)
           .set(fields)
-          .where(eq(schema.menus.id, id))
-          .run();
+          .where(eq(schema.menus.id, id));
       }
 
       if (outlet_ids) {
-        db.delete(schema.menu_outlets)
-          .where(eq(schema.menu_outlets.menu_id, id))
-          .run();
+        await tx
+          .delete(schema.menu_outlets)
+          .where(eq(schema.menu_outlets.menu_id, id));
         for (const outletId of outlet_ids) {
-          db.insert(schema.menu_outlets)
-            .values({ menu_id: id, outlet_id: outletId })
-            .run();
+          await tx
+            .insert(schema.menu_outlets)
+            .values({ menu_id: id, outlet_id: outletId });
         }
       }
 
       if (recipe) {
-        db.delete(schema.recipe_items)
-          .where(eq(schema.recipe_items.menu_id, id))
-          .run();
+        await tx
+          .delete(schema.recipe_items)
+          .where(eq(schema.recipe_items.menu_id, id));
         for (const r of recipe) {
-          db.insert(schema.recipe_items)
-            .values({
-              id: genId("rec"),
-              menu_id: id,
-              ingredient_id: r.ingredient_id,
-              quantity: r.quantity,
-              notes: r.notes ?? null,
-            })
-            .run();
+          await tx.insert(schema.recipe_items).values({
+            id: genId("rec"),
+            menu_id: id,
+            ingredient_id: r.ingredient_id,
+            quantity: r.quantity,
+            notes: r.notes ?? null,
+          });
         }
       }
-    })();
+    });
 
     const after = await db
       .select()

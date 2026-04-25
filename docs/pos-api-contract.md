@@ -1,8 +1,15 @@
 # POS ↔ Backoffice API Contract
 
-**Status:** Draft v1 (2026-04-25)
+**Status:** Draft v1.1 (2026-04-25)
 **Audience:** Tim engineering aplikasi POS ALLEE.
 **Source of truth:** Backoffice ALLEE (`https://allee-backoffice.vercel.app`).
+
+**Highlight v1.1:**
+- Void granularity berubah ke **per-item** (sebelumnya per-struk). Endpoint
+  utama: `POST /api/transactions/:id/items/:itemId/void`. Lihat §4.2.
+- `transaction_items` sekarang punya field `voided_at` / `voided_by` /
+  `void_reason` yang dibalikin di setiap GET `/api/transactions[/:id]`.
+- Seed bootstrap men-generate random 4-digit POS PIN per user (lihat §2.2).
 
 > Backoffice adalah master data. POS hanya **membaca** master (menu, outlet,
 > add-on, bundle, diskon, bahan, pajak, user) dan **menulis kembali** transaksi
@@ -429,6 +436,33 @@ GET /api/transactions?outlet_id=out_dago&start=2026-04-25T00:00:00.000Z
 Limit hard-coded 1000 — POS tidak boleh scrape semua history dari sini.
 Untuk laporan harian, query per shift saja.
 
+**Shape item — perhatikan field void (baru di v1.1):**
+```json
+{
+  "id": "ti_xxx",
+  "transaction_id": "tx_yyy",
+  "menu_id": "mnu_ice_latte",
+  "bundle_id": null,
+  "name_snapshot": "Ice Latte",
+  "quantity": 2,
+  "unit_price": 28000,
+  "hpp_snapshot": 9500,
+  "subtotal": 56000,
+  "voided_at": "2026-04-25T10:23:45.000Z",   // null kalau item masih aktif
+  "voided_by": "usr_kasir_a3f1",              // user.id yang melakukan void
+  "void_reason": "Salah racik — pelanggan minta less sugar",
+  "addons": [ /* … */ ]
+}
+```
+- Item dengan `voided_at !== null` **tidak ikut** revenue di laporan.
+  POS UI sebaiknya render strikethrough + badge "VOID" supaya kasir paham
+  ketika buka history.
+- `transactions.status` tetap `"paid"` sekalipun semua item-nya voided —
+  status flip kerek-kerek backward-compat dari era v1.0 (lihat §9 Changelog).
+- Field-field ini juga ada di response `POST /api/transactions/:id/items/:itemId/void`
+  via re-fetch (POS yang efisien tinggal patch state lokal pakai
+  `voided_at` dari respons void).
+
 ### 4.4. (Optional) `POST /api/attendance`
 Clock-in/out kasir. Lihat `src/app/api/attendance/route.ts` — schema-nya
 mandiri. POS panggil saat tap "Mulai Shift" / "Akhiri Shift".
@@ -494,7 +528,7 @@ Lihat `docs/deploy-turso.md` §6 untuk konfigurasi cookie + env. Ringkas:
 
 | # | Gap                                                          | Priority |
 |---|--------------------------------------------------------------|----------|
-| 1 | `POST /api/auth/pos-pin` — exchange PIN → session            | High     |
+| 1 | `POST /api/auth/pos-pin` — exchange PIN → session (PIN sudah di-seed; tukar ke session yang belum ada) | High     |
 | 2 | Bearer token issue endpoint untuk runtime cross-origin       | Medium   |
 | 3 | Bundle stock auto-deduct (sekarang skip)                     | Medium   |
 | 4 | `ETag` / `If-None-Match` di endpoint master data             | Low      |
@@ -508,5 +542,20 @@ Semua gap ini tidak menghalangi MVP — POS bisa dibangun sekarang dengan
 
 ## 9. Changelog
 
+- **2026-04-25** v1.1. Per-item void granularity + random PIN seed bootstrap.
+  - Void granularity dipindah dari per-struk → per-item. Endpoint utama
+    `POST /api/transactions/:id/items/:itemId/void` (lihat §4.2.a). Endpoint
+    lama `POST /api/transactions/:id/void` tetap ada sebagai shortcut
+    "void seluruh struk" (§4.2.b).
+  - `transaction_items` dapat tiga kolom baru: `voided_at`, `voided_by`,
+    `void_reason`. Migration `0002_tx_item_void.sql` sekaligus backfill data
+    legacy (transaksi yang sebelumnya `status === "void"` di-mark per-item).
+  - `transactions.status === "paid"` sesudah void per-item → revenue di
+    laporan = Σ subtotal item aktif − discount_total. Laporan Void
+    (`/reports/void-*`) sekarang aggregate per-item, bukan per-tx.
+  - `npm run db:seed` men-generate random 4-digit POS PIN per user dan
+    print plaintext-nya di console output (lihat §2.2). PIN ini hanya
+    untuk smoke-test; rotate via Backoffice → Users sebelum produksi.
+  - Stok bahan **tidak** di-restore saat void (operational loss).
 - **2026-04-25** v1 draft. Initial contract berdasar deploy production
   `f6543c0` (menus contract fix + libSQL backend).

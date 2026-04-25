@@ -308,7 +308,8 @@ export type AuditEntity =
   | "ojol_channel"
   | "menu_channel_listing"
   | "pos_pin"
-  | "transaction";
+  | "transaction"
+  | "printer";
 
 export interface AuditChange {
   field: string;

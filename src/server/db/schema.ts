@@ -500,6 +500,47 @@ export const pos_shifts = sqliteTable("pos_shifts", {
     .default(sql`(current_timestamp)`),
 });
 
+/**
+ * Printer registry per outlet — master data milik backoffice. POS pull via
+ * sync seperti menu/kategori; cashier di POS lalu memilih MAX 2 printer
+ * (receipt + kitchen) yang aktif di device-nya. Tidak ada koneksi langsung
+ * dari backoffice ke hardware printer — field `connection`/`address` murni
+ * deskriptif untuk dokumentasi & monitoring (owner ingin tahu berapa
+ * printer yang ada per outlet + kode masing-masing).
+ */
+export const printers = sqliteTable("printers", {
+  id: text("id").primaryKey(),
+  outlet_id: text("outlet_id")
+    .notNull()
+    .references(() => outlets.id, { onDelete: "cascade" }),
+  /** Kode pendek unik per outlet, mis. "P-CASHIER-1" / "P-KITCHEN-A". */
+  code: text("code").notNull(),
+  /** Nama display di UI, mis. "Printer Kasir Bar". */
+  name: text("name").notNull(),
+  /** Tipe peruntukan — POS pakai ini untuk routing default. */
+  type: text("type", { enum: ["cashier", "kitchen", "bar", "label"] })
+    .notNull()
+    .default("cashier"),
+  /** Deskriptif: bagaimana printer terhubung ke device kasir. */
+  connection: text("connection", {
+    enum: ["usb", "bluetooth", "network", "other"],
+  })
+    .notNull()
+    .default("usb"),
+  /** Detail koneksi optional — IP, vendor/product id, MAC, dll. */
+  address: text("address"),
+  /** Lebar kertas dalam karakter (58mm ≈ 32 cols, 80mm ≈ 48 cols). */
+  paper_width: integer("paper_width").notNull().default(32),
+  note: text("note"),
+  is_active: integer("is_active", { mode: "boolean" }).notNull().default(true),
+  created_at: text("created_at")
+    .notNull()
+    .default(sql`(current_timestamp)`),
+  updated_at: text("updated_at")
+    .notNull()
+    .default(sql`(current_timestamp)`),
+});
+
 export const sales_targets = sqliteTable("sales_targets", {
   id: text("id").primaryKey(),
   year: integer("year").notNull(),

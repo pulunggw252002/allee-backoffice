@@ -37,7 +37,8 @@ export type PosSyncEntity =
   | "discount"
   | "ingredient"
   | "outlet"
-  | "tax_settings";
+  | "tax_settings"
+  | "printer";
 
 export type PosSyncEvent = "created" | "updated" | "deleted";
 

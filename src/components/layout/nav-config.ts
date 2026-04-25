@@ -139,5 +139,9 @@ export const NAV_ITEMS: NavItem[] = [
     href: "/settings",
     icon: Settings,
     roles: ["owner"],
+    children: [
+      { label: "Pajak & Service", href: "/settings", roles: ["owner"] },
+      { label: "Printer", href: "/settings/printers", roles: ["owner"] },
+    ],
   },
 ];

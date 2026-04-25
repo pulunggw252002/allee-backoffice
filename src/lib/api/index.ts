@@ -16,3 +16,4 @@ export * as attendanceSettingsApi from "./attendance-settings";
 export * as taxSettingsApi from "./tax-settings";
 export * as salesTargetsApi from "./sales-targets";
 export * as ojolApi from "./ojol";
+export * as printersApi from "./printers";

@@ -1,5 +1,5 @@
 /**
- * GET    /api/menus/:id  — single menu with recipe + outlet_ids
+ * GET    /api/menus/:id  — single menu with recipes + outlet_ids + addon_group_ids
  * PATCH  /api/menus/:id  — update menu fields, recipe, and outlet assignments
  * DELETE /api/menus/:id  — soft-delete (is_active=false)
  */
@@ -22,20 +22,33 @@ export async function GET(_req: Request, { params }: Ctx) {
       .where(eq(schema.menus.id, id))
       .get();
     if (!menu) notFound("Menu");
-    const outlets = await db
-      .select()
-      .from(schema.menu_outlets)
-      .where(eq(schema.menu_outlets.menu_id, id))
-      .all();
-    const recipe = await db
-      .select()
-      .from(schema.recipe_items)
-      .where(eq(schema.recipe_items.menu_id, id))
-      .all();
+    const [outlets, recipes, addonGroups] = await Promise.all([
+      db
+        .select()
+        .from(schema.menu_outlets)
+        .where(eq(schema.menu_outlets.menu_id, id))
+        .all(),
+      db
+        .select()
+        .from(schema.recipe_items)
+        .where(eq(schema.recipe_items.menu_id, id))
+        .all(),
+      db
+        .select()
+        .from(schema.menu_addon_groups)
+        .where(eq(schema.menu_addon_groups.menu_id, id))
+        .all(),
+    ]);
+    // Frontend `MenuWithRelations` expects `recipes` (plural) and
+    // `addon_group_ids`. Mock-mode (`src/lib/api/menus.ts`) hydrates
+    // these — keep the real backend in lockstep so the same UI components
+    // work against either source. The PATCH/POST input is still `recipe`
+    // (singular) — that's a separate write-side contract.
     return {
       ...menu,
       outlet_ids: outlets.map((o) => o.outlet_id),
-      recipe,
+      recipes,
+      addon_group_ids: addonGroups.map((a) => a.addon_group_id),
     };
   });
 }

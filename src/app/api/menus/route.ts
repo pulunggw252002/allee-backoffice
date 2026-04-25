@@ -9,24 +9,23 @@ import { requireRole, requireSession } from "@/server/auth/session";
 import { genId, handle, readJson } from "@/server/api/helpers";
 import { logAudit } from "@/server/api/audit";
 
-/** Hydrate a menu row with its many-to-many outlet links. */
-async function hydrateOutlets(menuIds: string[]) {
-  if (menuIds.length === 0) return new Map<string, string[]>();
-  const rows = await db
-    .select()
-    .from(schema.menu_outlets)
-    .where(
-      sql`${schema.menu_outlets.menu_id} IN (${sql.join(
-        menuIds.map((id) => sql`${id}`),
-        sql`, `,
-      )})`,
-    )
-    .all();
-  const map = new Map<string, string[]>();
+type RecipeItem = typeof schema.recipe_items.$inferSelect;
+
+/**
+ * Bucket FK rows under their parent menu in a single pass. Caller does one
+ * `WHERE menu_id IN (...)` then this groups the result client-side, instead
+ * of issuing N queries for N menus.
+ */
+function groupBy<T, K extends string>(
+  rows: T[],
+  key: (row: T) => K,
+): Map<K, T[]> {
+  const map = new Map<K, T[]>();
   for (const r of rows) {
-    const arr = map.get(r.menu_id) ?? [];
-    arr.push(r.outlet_id);
-    map.set(r.menu_id, arr);
+    const k = key(r);
+    const arr = map.get(k) ?? [];
+    arr.push(r);
+    map.set(k, arr);
   }
   return map;
 }
@@ -35,10 +34,53 @@ export async function GET() {
   return handle(async () => {
     await requireSession();
     const menus = await db.select().from(schema.menus).all();
-    const outletMap = await hydrateOutlets(menus.map((m) => m.id));
+    if (menus.length === 0) return [];
+    const ids = menus.map((m) => m.id);
+    const inIds = sql`${schema.menu_outlets.menu_id} IN (${sql.join(
+      ids.map((id) => sql`${id}`),
+      sql`, `,
+    )})`;
+
+    // Frontend `MenuWithRelations` reads `outlet_ids`, `recipes` (plural),
+    // and `addon_group_ids` for every menu in the list. The recipes page
+    // crashes if any of these are missing, so we hydrate all three in
+    // parallel — three round-trips instead of 3×N.
+    const [outlets, recipes, addons] = await Promise.all([
+      db.select().from(schema.menu_outlets).where(inIds).all(),
+      db
+        .select()
+        .from(schema.recipe_items)
+        .where(
+          sql`${schema.recipe_items.menu_id} IN (${sql.join(
+            ids.map((id) => sql`${id}`),
+            sql`, `,
+          )})`,
+        )
+        .all(),
+      db
+        .select()
+        .from(schema.menu_addon_groups)
+        .where(
+          sql`${schema.menu_addon_groups.menu_id} IN (${sql.join(
+            ids.map((id) => sql`${id}`),
+            sql`, `,
+          )})`,
+        )
+        .all(),
+    ]);
+
+    const outletMap = groupBy(outlets, (r) => r.menu_id);
+    const recipeMap: Map<string, RecipeItem[]> = groupBy(
+      recipes,
+      (r) => r.menu_id,
+    );
+    const addonMap = groupBy(addons, (r) => r.menu_id);
+
     return menus.map((m) => ({
       ...m,
-      outlet_ids: outletMap.get(m.id) ?? [],
+      outlet_ids: (outletMap.get(m.id) ?? []).map((r) => r.outlet_id),
+      recipes: recipeMap.get(m.id) ?? [],
+      addon_group_ids: (addonMap.get(m.id) ?? []).map((r) => r.addon_group_id),
     }));
   });
 }

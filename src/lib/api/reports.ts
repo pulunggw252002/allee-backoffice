@@ -1133,6 +1133,10 @@ export async function voidByStaff(params: {
 
 export interface VoidRow {
   id: string;
+  /** Parent transaction id — di-emit oleh real backend supaya UI bisa link
+   * langsung ke struk. Tidak ada di mock (mock pakai item.id sebagai id).
+   * Optional supaya kedua mode tetap valid. */
+  transaction_id?: string;
   created_at: string;
   outlet_id: string;
   outlet_name: string;

@@ -1,6 +1,13 @@
 /**
  * GET /api/reports/low-stock?outlet_id=
- * Ingredients at or below `min_qty` (status=low) or below 1.5× (status=warning).
+ *
+ * Bahan dengan stok di atau di bawah `min_qty` (severity="critical") atau
+ * di bawah 1.5× min_qty (severity="warning"). Bentuk response **harus** match
+ * `LowStockItem` di `src/lib/api/reports.ts` — kalau field di-rename, panel
+ * low-stock di dashboard tinggal render kosong tanpa error visible.
+ *
+ * Sort: critical dulu, lalu warning, lalu rasio current/min ascending
+ * (paling kritis paling atas).
  */
 import { eq } from "drizzle-orm";
 import { db, schema } from "@/server/db/client";
@@ -14,21 +21,50 @@ export async function GET(req: Request) {
     const session = await requireSession();
     const url = new URL(req.url);
     const outletId = scopedOutletId(session, url.searchParams.get("outlet_id"));
-    const q = db.select().from(schema.ingredients);
+
+    const ingQ = db.select().from(schema.ingredients);
     const rows = outletId
-      ? await q.where(eq(schema.ingredients.outlet_id, outletId)).all()
-      : await q.all();
-    return rows
+      ? await ingQ.where(eq(schema.ingredients.outlet_id, outletId)).all()
+      : await ingQ.all();
+
+    // Lookup outlet name sekali (kecil tabelnya).
+    const outlets = await db
+      .select({ id: schema.outlets.id, name: schema.outlets.name })
+      .from(schema.outlets)
+      .all();
+    const outletNameById = new Map(outlets.map((o) => [o.id, o.name]));
+
+    type Severity = "critical" | "warning";
+    interface LowStockItem {
+      ingredient_id: string;
+      name: string;
+      outlet_id: string;
+      outlet_name: string;
+      current_stock: number;
+      min_qty: number;
+      unit: string;
+      severity: Severity;
+    }
+
+    const items: LowStockItem[] = rows
       .filter((i) => i.current_stock <= i.min_qty * WARNING_MULTIPLIER)
       .map((i) => ({
-        id: i.id,
+        ingredient_id: i.id,
         name: i.name,
-        unit: i.unit,
+        outlet_id: i.outlet_id,
+        outlet_name: outletNameById.get(i.outlet_id) ?? "",
         current_stock: i.current_stock,
         min_qty: i.min_qty,
-        outlet_id: i.outlet_id,
-        status: i.current_stock <= i.min_qty ? "low" : "warning",
-      }))
-      .sort((a, b) => a.current_stock / (a.min_qty || 1) - b.current_stock / (b.min_qty || 1));
+        unit: i.unit,
+        severity: (i.current_stock <= i.min_qty ? "critical" : "warning") as Severity,
+      }));
+
+    items.sort((a, b) => {
+      if (a.severity !== b.severity) return a.severity === "critical" ? -1 : 1;
+      return (
+        a.current_stock / (a.min_qty || 1) - b.current_stock / (b.min_qty || 1)
+      );
+    });
+    return items;
   });
 }

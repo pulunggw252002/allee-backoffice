@@ -1,6 +1,11 @@
 /**
  * GET /api/reports/daily-series?outlet_id=&start=&end=
- * One point per day in the window: { date, revenue, hpp, profit, count }.
+ * One point per day: { date, revenue, net_sales, hpp, profit, count }.
+ *
+ * `revenue` dan `net_sales` sengaja punya nilai sama (already net of discount)
+ * supaya cocok dengan kontrak `DailySeriesPoint` di `src/lib/api/reports.ts`
+ * (yang dipakai dashboard). Field `revenue` legacy dibiarkan supaya konsumer
+ * lama tidak break.
  *
  * Per-item void aware: item dengan `voided_at !== null` di-skip dari revenue
  * & HPP. Revenue per tx = (Σ active_item.subtotal) − tx.discount_total
@@ -58,19 +63,29 @@ export async function GET(req: Request) {
 
     const byDay = new Map<
       string,
-      { date: string; revenue: number; hpp: number; profit: number; count: number }
+      {
+        date: string;
+        revenue: number;
+        net_sales: number;
+        hpp: number;
+        profit: number;
+        count: number;
+      }
     >();
     for (const t of txs) {
       const date = t.created_at.slice(0, 10);
       const row = byDay.get(date) ?? {
         date,
         revenue: 0,
+        net_sales: 0,
         hpp: 0,
         profit: 0,
         count: 0,
       };
       const sub = subByTx.get(t.id) ?? 0;
-      row.revenue += sub > 0 ? sub - t.discount_total : 0;
+      const net = sub > 0 ? sub - t.discount_total : 0;
+      row.revenue += net;
+      row.net_sales += net;
       row.hpp += hppByTx.get(t.id) ?? 0;
       row.count += 1;
       byDay.set(date, row);

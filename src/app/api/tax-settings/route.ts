@@ -8,6 +8,7 @@ import { db, schema } from "@/server/db/client";
 import { requireRole, requireSession } from "@/server/auth/session";
 import { handle, nowIso, readJson } from "@/server/api/helpers";
 import { logAudit } from "@/server/api/audit";
+import { firePosSync } from "@/lib/webhooks/pos-sync";
 
 const SINGLETON = "singleton";
 
@@ -60,6 +61,7 @@ export async function PUT(req: Request) {
       entity_id: SINGLETON,
       entity_name: "Tax settings",
     });
+    await firePosSync({ entity: "tax_settings", event: "updated", entity_id: SINGLETON });
     return next;
   });
 }

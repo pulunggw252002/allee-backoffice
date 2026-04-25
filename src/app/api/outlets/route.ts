@@ -7,6 +7,7 @@ import { db, schema } from "@/server/db/client";
 import { requireRole, requireSession } from "@/server/auth/session";
 import { genId, handle, nowIso, readJson } from "@/server/api/helpers";
 import { logAudit } from "@/server/api/audit";
+import { firePosSync } from "@/lib/webhooks/pos-sync";
 
 export async function GET() {
   return handle(async () => {
@@ -37,6 +38,12 @@ export async function POST(req: Request) {
       entity: "outlet",
       entity_id: outlet.id,
       entity_name: outlet.name,
+      outlet_id: outlet.id,
+    });
+    await firePosSync({
+      entity: "outlet",
+      event: "created",
+      entity_id: outlet.id,
       outlet_id: outlet.id,
     });
     return outlet;

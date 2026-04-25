@@ -8,6 +8,7 @@ import { db, schema } from "@/server/db/client";
 import { requireRole, requireSession } from "@/server/auth/session";
 import { genId, handle, readJson } from "@/server/api/helpers";
 import { logAudit } from "@/server/api/audit";
+import { firePosSync } from "@/lib/webhooks/pos-sync";
 
 type RecipeItem = typeof schema.recipe_items.$inferSelect;
 
@@ -153,6 +154,7 @@ export async function POST(req: Request) {
       .from(schema.menus)
       .where(eq(schema.menus.id, menuId))
       .get();
+    await firePosSync({ entity: "menu", event: "created", entity_id: menuId });
     return { ...created, outlet_ids: input.outlet_ids ?? [] };
   });
 }

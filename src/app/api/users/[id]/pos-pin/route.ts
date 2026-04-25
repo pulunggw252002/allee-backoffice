@@ -17,6 +17,7 @@ import { requireRole, requireSession } from "@/server/auth/session";
 import { handle, notFound, readJson } from "@/server/api/helpers";
 import { logAudit } from "@/server/api/audit";
 import { maskPin } from "@/server/api/user-utils";
+import { firePosSync } from "@/lib/webhooks/pos-sync";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -68,6 +69,15 @@ export async function PUT(req: Request, { params }: Ctx) {
       .from(schema.users)
       .where(eq(schema.users.id, id))
       .get();
+    // PIN baru harus segera bisa dipakai login di POS. Webhook ini bikin
+    // POS me-resync user table dalam hitungan detik — kasir tidak perlu
+    // tunggu cron daily.
+    await firePosSync({
+      entity: "pos_pin",
+      event: pin === null ? "deleted" : "updated",
+      entity_id: user.id,
+      outlet_id: user.outlet_id ?? undefined,
+    });
     // Match the shape returned by GET /api/users/[id] — `pos_pin_hash` is
     // stripped and replaced with a redacted `pos_pin` marker so the client's
     // `User` type stays uniform across every endpoint.

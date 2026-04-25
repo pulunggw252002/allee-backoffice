@@ -8,6 +8,7 @@ import { db, schema } from "@/server/db/client";
 import { requireRole, requireSession } from "@/server/auth/session";
 import { genId, handle, notFound, readJson } from "@/server/api/helpers";
 import { diffChanges, logAudit } from "@/server/api/audit";
+import { firePosSync } from "@/lib/webhooks/pos-sync";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -94,6 +95,7 @@ export async function PATCH(req: Request, { params }: Ctx) {
         after as unknown as Record<string, unknown>,
       ),
     });
+    await firePosSync({ entity: "addon_group", event: "updated", entity_id: id });
     return after;
   });
 }
@@ -118,6 +120,7 @@ export async function DELETE(_req: Request, { params }: Ctx) {
       entity_id: id,
       entity_name: row.name,
     });
+    await firePosSync({ entity: "addon_group", event: "deleted", entity_id: id });
     return { ok: true };
   });
 }

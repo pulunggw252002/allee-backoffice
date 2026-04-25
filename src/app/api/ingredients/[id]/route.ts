@@ -14,6 +14,7 @@ import {
   readJson,
 } from "@/server/api/helpers";
 import { diffChanges, logAudit } from "@/server/api/audit";
+import { firePosSync } from "@/lib/webhooks/pos-sync";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -83,6 +84,12 @@ export async function PATCH(req: Request, { params }: Ctx) {
         after as unknown as Record<string, unknown>,
       ),
     });
+    await firePosSync({
+      entity: "ingredient",
+      event: "updated",
+      entity_id: id,
+      outlet_id: after!.outlet_id,
+    });
     return after;
   });
 }
@@ -106,6 +113,12 @@ export async function DELETE(_req: Request, { params }: Ctx) {
       entity: "ingredient",
       entity_id: id,
       entity_name: row.name,
+      outlet_id: row.outlet_id,
+    });
+    await firePosSync({
+      entity: "ingredient",
+      event: "deleted",
+      entity_id: id,
       outlet_id: row.outlet_id,
     });
     return { ok: true };

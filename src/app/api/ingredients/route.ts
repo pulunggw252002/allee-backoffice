@@ -18,6 +18,7 @@ import {
   readJson,
 } from "@/server/api/helpers";
 import { logAudit } from "@/server/api/audit";
+import { firePosSync } from "@/lib/webhooks/pos-sync";
 
 export async function GET(req: Request) {
   return handle(async () => {
@@ -66,6 +67,12 @@ export async function POST(req: Request) {
       entity: "ingredient",
       entity_id: row.id,
       entity_name: row.name,
+      outlet_id: row.outlet_id,
+    });
+    await firePosSync({
+      entity: "ingredient",
+      event: "created",
+      entity_id: row.id,
       outlet_id: row.outlet_id,
     });
     return row;

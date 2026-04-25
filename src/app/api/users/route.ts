@@ -10,6 +10,7 @@ import { requireRole, requireSession, scopedOutletId } from "@/server/auth/sessi
 import { genId, handle, nowIso, readJson } from "@/server/api/helpers";
 import { logAudit } from "@/server/api/audit";
 import { maskPin } from "@/server/api/user-utils";
+import { firePosSync } from "@/lib/webhooks/pos-sync";
 
 const ROLE_VALUES = [
   "owner",
@@ -108,6 +109,12 @@ export async function POST(req: Request) {
       .from(schema.users)
       .where(eq(schema.users.id, userId))
       .get();
+    await firePosSync({
+      entity: "user",
+      event: "created",
+      entity_id: userId,
+      outlet_id: input.outlet_id ?? undefined,
+    });
     return { ...maskPin(created!), email };
   });
 }

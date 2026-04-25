@@ -11,6 +11,7 @@ import { requireRole, requireSession } from "@/server/auth/session";
 import { handle, notFound, readJson } from "@/server/api/helpers";
 import { diffChanges, logAudit } from "@/server/api/audit";
 import { maskPin } from "@/server/api/user-utils";
+import { firePosSync } from "@/lib/webhooks/pos-sync";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -100,6 +101,12 @@ export async function PATCH(req: Request, { params }: Ctx) {
       ),
       notes: password ? "Password diperbarui" : undefined,
     });
+    await firePosSync({
+      entity: "user",
+      event: "updated",
+      entity_id: id,
+      outlet_id: after!.outlet_id ?? undefined,
+    });
     return maskPin(after!);
   });
 }
@@ -126,6 +133,12 @@ export async function DELETE(_req: Request, { params }: Ctx) {
       entity_name: row.name,
       outlet_id: row.outlet_id,
       notes: "User dinonaktifkan",
+    });
+    await firePosSync({
+      entity: "user",
+      event: "deleted",
+      entity_id: id,
+      outlet_id: row.outlet_id ?? undefined,
     });
     return { ok: true };
   });

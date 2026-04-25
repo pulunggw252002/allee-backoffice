@@ -4,6 +4,7 @@ import { db, schema } from "@/server/db/client";
 import { requireRole, requireSession } from "@/server/auth/session";
 import { genId, handle, readJson } from "@/server/api/helpers";
 import { logAudit } from "@/server/api/audit";
+import { firePosSync } from "@/lib/webhooks/pos-sync";
 
 export async function GET() {
   return handle(async () => {
@@ -78,6 +79,7 @@ export async function POST(req: Request) {
       entity_id: id,
       entity_name: input.name,
     });
+    await firePosSync({ entity: "bundle", event: "created", entity_id: id });
     return { id, ...input };
   });
 }

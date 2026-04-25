@@ -19,6 +19,12 @@ export interface NavItem {
   href: string;
   icon: LucideIcon;
   roles: Role[];
+  /**
+   * Tandai item sebagai "Segera Hadir". Sidebar/mobile-nav merender item ini
+   * sebagai non-clickable disabled state + badge "Segera Hadir". Children juga
+   * di-skip agar tidak ada cara menavigasi via UI.
+   */
+  comingSoon?: boolean;
   children?: Array<{ label: string; href: string; roles: Role[] }>;
 }
 
@@ -112,6 +118,7 @@ export const NAV_ITEMS: NavItem[] = [
     href: "/integrations",
     icon: Plug,
     roles: ["owner"],
+    comingSoon: true,
     children: [
       {
         label: "Ojol (GoFood / GrabFood / ShopeeFood)",

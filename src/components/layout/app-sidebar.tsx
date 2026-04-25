@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { NAV_ITEMS } from "./nav-config";
 import type { Role } from "@/types";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Badge } from "@/components/ui/badge";
 import { Coffee } from "lucide-react";
 import { config, appVersionLabel } from "@/lib/config";
 
@@ -41,6 +42,30 @@ export function AppSidebar({ role }: { role: Role }) {
             const visibleChildren = item.children?.filter((c) =>
               c.roles.includes(role),
             );
+
+            // Item dengan flag `comingSoon`: render sebagai non-link disabled
+            // dengan badge. Children sengaja tidak dirender — supaya tidak ada
+            // jalur navigasi UI ke fitur yang belum siap.
+            if (item.comingSoon) {
+              return (
+                <div
+                  key={item.href}
+                  aria-disabled="true"
+                  title="Fitur belum tersedia"
+                  className={cn(
+                    "flex cursor-not-allowed items-center gap-3 rounded-md px-3 py-2 text-sm font-medium",
+                    "text-sidebar-foreground/50",
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span>{item.label}</span>
+                  <Badge variant="outline" className="ml-auto text-[10px]">
+                    Segera Hadir
+                  </Badge>
+                </div>
+              );
+            }
+
             return (
               <div key={item.href}>
                 <Link

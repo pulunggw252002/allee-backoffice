@@ -32,6 +32,7 @@ import { formatIDR, formatNumber, formatPercent } from "@/lib/format";
 import { calcMargin, calcRecipeHpp, marginToBadgeVariant } from "@/lib/hpp";
 import { canViewCosts } from "@/lib/rbac";
 import { useAuthStore } from "@/stores/auth-store";
+import { CategoryDialog } from "@/components/menu/category-form";
 
 interface RecipeRow {
   ingredient_id: string;
@@ -254,7 +255,29 @@ export function MenuForm({ initial }: { initial?: MenuWithRelations }) {
                 </p>
               </div>
               <div className="space-y-2">
-                <Label>Kategori</Label>
+                <div className="flex items-center justify-between">
+                  <Label>Kategori</Label>
+                  {canSetPrice ? (
+                    <CategoryDialog
+                      defaultSortOrder={categories.length + 1}
+                      onDone={() => {
+                        // Setelah kategori baru dibuat, query
+                        // ["categories"] di-invalidate dari dalam dialog.
+                        // List di sini akan re-fetch otomatis.
+                      }}
+                      trigger={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 gap-1 px-2 text-xs"
+                        >
+                          <Plus className="h-3 w-3" /> Tambah
+                        </Button>
+                      }
+                    />
+                  ) : null}
+                </div>
                 <Select
                   value={categoryId}
                   onValueChange={setCategoryId}
@@ -264,11 +287,18 @@ export function MenuForm({ initial }: { initial?: MenuWithRelations }) {
                     <SelectValue placeholder="Pilih kategori" />
                   </SelectTrigger>
                   <SelectContent>
-                    {categories.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.name}
-                      </SelectItem>
-                    ))}
+                    {categories.length === 0 ? (
+                      <div className="px-2 py-3 text-center text-xs text-muted-foreground">
+                        Belum ada kategori. Klik <strong>+ Tambah</strong> di
+                        atas untuk membuat.
+                      </div>
+                    ) : (
+                      categories.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.name}
+                        </SelectItem>
+                      ))
+                    )}
                   </SelectContent>
                 </Select>
               </div>

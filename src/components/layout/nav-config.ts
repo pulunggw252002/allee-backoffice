@@ -54,6 +54,7 @@ export const NAV_ITEMS: NavItem[] = [
     roles: ["owner", "kepala_toko"],
     children: [
       { label: "Daftar Menu", href: "/menu", roles: ["owner", "kepala_toko"] },
+      { label: "Kategori", href: "/menu/categories", roles: ["owner"] },
       { label: "Add-on", href: "/menu/addons", roles: ["owner"] },
       { label: "Bundling", href: "/menu/bundles", roles: ["owner"] },
       { label: "Diskon", href: "/menu/discounts", roles: ["owner"] },

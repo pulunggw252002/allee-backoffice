@@ -16,6 +16,25 @@ export async function GET() {
   });
 }
 
+/**
+ * Receipt-footer disimpan sebagai JSON array of strings di kolom TEXT
+ * (`receipt_footer`). Schema mendukung dua input shape:
+ *   - array string  → di-stringify lalu disimpan
+ *   - string        → di-split per newline, di-trim, baru di-stringify
+ * Cara ini bikin UI bebas pakai textarea biasa tanpa harus split/join sendiri.
+ */
+const ReceiptFooterInput = z.union([z.array(z.string()), z.string()]).optional();
+
+function normalizeReceiptFooter(input: unknown): string | null | undefined {
+  if (input === undefined) return undefined; // tidak diubah
+  if (input === null || input === "") return null;
+  const arr = Array.isArray(input)
+    ? input
+    : String(input).split("\n");
+  const cleaned = arr.map((s) => s.trim()).filter(Boolean);
+  return cleaned.length === 0 ? null : JSON.stringify(cleaned);
+}
+
 const CreateInput = z.object({
   name: z.string().min(1),
   address: z.string().default(""),
@@ -23,6 +42,10 @@ const CreateInput = z.object({
   phone: z.string().default(""),
   opening_hours: z.string().default(""),
   is_active: z.boolean().default(true),
+  brand_name: z.string().nullish(),
+  brand_subtitle: z.string().nullish(),
+  receipt_footer: ReceiptFooterInput,
+  tax_id: z.string().nullish(),
 });
 
 export async function POST(req: Request) {
@@ -31,7 +54,13 @@ export async function POST(req: Request) {
     requireRole(session, ["owner"]);
 
     const input = await readJson(req, CreateInput);
-    const outlet = { id: genId("out"), ...input, created_at: nowIso() };
+    const { receipt_footer, ...rest } = input;
+    const outlet = {
+      id: genId("out"),
+      ...rest,
+      receipt_footer: normalizeReceiptFooter(receipt_footer) ?? null,
+      created_at: nowIso(),
+    };
     await db.insert(schema.outlets).values(outlet);
     await logAudit(session, {
       action: "create",

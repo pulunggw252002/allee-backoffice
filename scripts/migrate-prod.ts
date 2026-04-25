@@ -67,6 +67,23 @@ const migrations: Migration[] = [
   },
 ];
 
+/**
+ * Tambahin kolom kalau belum ada. SQLite tidak punya `ALTER TABLE ADD COLUMN
+ * IF NOT EXISTS`, jadi kita inspect PRAGMA dulu — bikin idempotent buat
+ * re-run migration.
+ */
+async function addColumnIfMissing(
+  table: string,
+  column: string,
+  ddl: string,
+): Promise<"added" | "exists"> {
+  const info = await client.execute(`PRAGMA table_info(${table})`);
+  const has = info.rows.some((r) => (r as Record<string, unknown>).name === column);
+  if (has) return "exists";
+  await client.execute(`ALTER TABLE "${table}" ADD COLUMN ${ddl}`);
+  return "added";
+}
+
 async function main() {
   console.log("→ Connecting to:", PROD_URL.slice(0, 30) + "…\n");
 
@@ -79,6 +96,24 @@ async function main() {
         args: [m.name],
       });
       console.log(exists.rows.length > 0 ? "✓ ready" : "✗ verify failed");
+    } catch (err) {
+      console.log("✗", err instanceof Error ? err.message : err);
+      process.exit(1);
+    }
+  }
+
+  // ── Outlet receipt customization columns (0004_outlet_receipt) ────────────
+  const outletReceiptColumns: Array<[string, string]> = [
+    ["brand_name", `"brand_name" text`],
+    ["brand_subtitle", `"brand_subtitle" text`],
+    ["receipt_footer", `"receipt_footer" text`],
+    ["tax_id", `"tax_id" text`],
+  ];
+  for (const [col, ddl] of outletReceiptColumns) {
+    process.stdout.write(`  · outlets.${col}: `);
+    try {
+      const r = await addColumnIfMissing("outlets", col, ddl);
+      console.log(r === "added" ? "✓ added" : "✓ exists");
     } catch (err) {
       console.log("✗", err instanceof Error ? err.message : err);
       process.exit(1);

@@ -24,6 +24,17 @@ export interface Outlet {
   opening_hours: string;
   is_active: boolean;
   created_at: string;
+  /** Brand di header struk. NULL ⇒ fallback ke `name`. */
+  brand_name?: string | null;
+  /** Tagline kecil di bawah brand name. */
+  brand_subtitle?: string | null;
+  /**
+   * JSON-stringified array of strings — line-by-line footer struk.
+   * Cara baca: JSON.parse(outlet.receipt_footer) → string[].
+   */
+  receipt_footer?: string | null;
+  /** NPWP outlet (kalau PKP). */
+  tax_id?: string | null;
 }
 
 export interface User {

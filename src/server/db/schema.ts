@@ -38,6 +38,17 @@ export const outlets = sqliteTable("outlets", {
   created_at: text("created_at")
     .notNull()
     .default(sql`(current_timestamp)`),
+  /**
+   * Receipt customization. Owner edit lewat halaman Outlet di backoffice;
+   * POS tarik via /api/outlets dan render persis di struk. Field NULL ⇒
+   * fallback (mis. brand_name NULL ⇒ pakai `name`).
+   */
+  brand_name: text("brand_name"),
+  brand_subtitle: text("brand_subtitle"),
+  /** JSON array of strings — line-by-line footer struk. */
+  receipt_footer: text("receipt_footer"),
+  /** NPWP — di-render kalau outlet PKP. */
+  tax_id: text("tax_id"),
 });
 
 /**

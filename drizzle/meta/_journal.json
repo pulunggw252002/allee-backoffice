@@ -29,6 +29,13 @@
       "when": 1777150000000,
       "tag": "0003_pos_shifts",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1777160000000,
+      "tag": "0004_outlet_receipt",
+      "breakpoints": true
     }
   ]
 }

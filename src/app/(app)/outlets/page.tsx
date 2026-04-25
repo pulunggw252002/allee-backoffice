@@ -12,6 +12,8 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Dialog,
   DialogContent,
@@ -32,6 +34,21 @@ import {
   Loader2,
 } from "lucide-react";
 
+/**
+ * Parse JSON-stringified receipt_footer (the storage format) ke array string
+ * yang enak diedit di textarea (1 baris = 1 line struk).
+ */
+function parseReceiptFooter(raw: string | null | undefined): string {
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.join("\n");
+  } catch {
+    // raw ternyata bukan JSON valid → tampilkan apa adanya, biarkan user fix.
+  }
+  return raw;
+}
+
 function OutletDialog({
   trigger,
   initial,
@@ -42,6 +59,7 @@ function OutletDialog({
   const [open, setOpen] = useState(false);
   const qc = useQueryClient();
 
+  // Basic info
   const [name, setName] = useState(initial?.name ?? "");
   const [city, setCity] = useState(initial?.city ?? "");
   const [address, setAddress] = useState(initial?.address ?? "");
@@ -50,6 +68,16 @@ function OutletDialog({
     initial?.opening_hours ?? "",
   );
   const [isActive, setIsActive] = useState(initial?.is_active ?? true);
+
+  // Receipt customization
+  const [brandName, setBrandName] = useState(initial?.brand_name ?? "");
+  const [brandSubtitle, setBrandSubtitle] = useState(
+    initial?.brand_subtitle ?? "",
+  );
+  const [taxId, setTaxId] = useState(initial?.tax_id ?? "");
+  const [receiptFooter, setReceiptFooter] = useState(
+    parseReceiptFooter(initial?.receipt_footer),
+  );
 
   const saveMutation = useMutation({
     mutationFn: async () => {
@@ -62,6 +90,12 @@ function OutletDialog({
         phone,
         opening_hours: openingHours,
         is_active: isActive,
+        // Receipt fields — kosongkan ⇒ null (POS akan fallback ke default).
+        brand_name: brandName.trim() || null,
+        brand_subtitle: brandSubtitle.trim() || null,
+        tax_id: taxId.trim() || null,
+        // Server-side normalize akan split per newline & JSON.stringify.
+        receipt_footer: receiptFooter,
       };
       return initial
         ? outletsApi.update(initial.id, payload)
@@ -77,65 +111,174 @@ function OutletDialog({
     },
   });
 
+  // Live preview lines
+  const previewBrand = brandName.trim() || name.trim() || "POS";
+  const previewFooterLines = receiptFooter
+    .split("\n")
+    .map((s) => s.trim())
+    .filter(Boolean);
+
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-2xl">
         <DialogHeader>
           <DialogTitle>
             {initial ? "Edit Outlet" : "Tambah Outlet"}
           </DialogTitle>
         </DialogHeader>
-        <div className="space-y-3">
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-2">
-              <Label>Nama Outlet</Label>
-              <Input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="ALLEE Dago"
-              />
+        <Tabs defaultValue="info" className="w-full">
+          <TabsList className="grid w-full grid-cols-2">
+            <TabsTrigger value="info">Info Outlet</TabsTrigger>
+            <TabsTrigger value="receipt">Edit Struk</TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="info" className="space-y-3 pt-2">
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Nama Outlet</Label>
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="ALLEE Dago"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Kota</Label>
+                <Input
+                  value={city}
+                  onChange={(e) => setCity(e.target.value)}
+                  placeholder="Bandung"
+                />
+              </div>
             </div>
             <div className="space-y-2">
-              <Label>Kota</Label>
+              <Label>Alamat</Label>
               <Input
-                value={city}
-                onChange={(e) => setCity(e.target.value)}
-                placeholder="Bandung"
+                value={address}
+                onChange={(e) => setAddress(e.target.value)}
+                placeholder="Jl. Ir. H. Juanda No. 123"
               />
             </div>
-          </div>
-          <div className="space-y-2">
-            <Label>Alamat</Label>
-            <Input
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              placeholder="Jl. Ir. H. Juanda No. 123"
-            />
-          </div>
-          <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-2">
-              <Label>Telepon</Label>
-              <Input
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                placeholder="022-..."
-              />
+            <div className="grid gap-3 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Telepon</Label>
+                <Input
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  placeholder="022-..."
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Jam Buka</Label>
+                <Input
+                  value={openingHours}
+                  onChange={(e) => setOpeningHours(e.target.value)}
+                  placeholder="08:00 - 22:00"
+                />
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label>Jam Buka</Label>
-              <Input
-                value={openingHours}
-                onChange={(e) => setOpeningHours(e.target.value)}
-                placeholder="08:00 - 22:00"
-              />
+            <div className="flex items-center justify-between rounded-md border p-3">
+              <Label>Aktif</Label>
+              <Switch checked={isActive} onCheckedChange={setIsActive} />
             </div>
-          </div>
-          <div className="flex items-center justify-between rounded-md border p-3">
-            <Label>Aktif</Label>
-            <Switch checked={isActive} onCheckedChange={setIsActive} />
-          </div>
-        </div>
+          </TabsContent>
+
+          <TabsContent value="receipt" className="grid gap-4 pt-2 md:grid-cols-2">
+            <div className="space-y-3">
+              <div className="space-y-2">
+                <Label>Brand Name (Header Struk)</Label>
+                <Input
+                  value={brandName}
+                  onChange={(e) => setBrandName(e.target.value)}
+                  placeholder="Kosongkan untuk pakai nama outlet"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Kalau kosong, header struk pakai nama outlet ({name || "—"}).
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label>Tagline / Subtitle</Label>
+                <Input
+                  value={brandSubtitle}
+                  onChange={(e) => setBrandSubtitle(e.target.value)}
+                  placeholder="Specialty Coffee & Brunch"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>NPWP</Label>
+                <Input
+                  value={taxId}
+                  onChange={(e) => setTaxId(e.target.value)}
+                  placeholder="00.000.000.0-000.000 (opsional, untuk PKP)"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Footer Struk</Label>
+                <Textarea
+                  value={receiptFooter}
+                  onChange={(e) => setReceiptFooter(e.target.value)}
+                  placeholder={"Terima kasih ☕\nSampai jumpa kembali!"}
+                  rows={5}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Tiap baris = 1 line di footer struk. Kosongkan kalau tidak
+                  perlu footer khusus.
+                </p>
+              </div>
+            </div>
+
+            {/* Live preview */}
+            <div className="rounded-md border bg-muted/30 p-3">
+              <p className="mb-2 text-xs font-medium text-muted-foreground">
+                Preview Struk
+              </p>
+              <div className="mx-auto max-w-[260px] font-mono text-[12px] leading-snug">
+                <div className="text-center">
+                  <p className="text-sm font-bold">{previewBrand}</p>
+                  {brandSubtitle.trim() && (
+                    <p className="text-[11px]">{brandSubtitle}</p>
+                  )}
+                  {address.trim() && (
+                    <p className="text-[10px]">{address}</p>
+                  )}
+                  {phone.trim() && (
+                    <p className="text-[10px]">Telp: {phone}</p>
+                  )}
+                  {taxId.trim() && (
+                    <p className="text-[10px]">NPWP: {taxId}</p>
+                  )}
+                  <p className="text-[11px]">
+                    --------------------------------
+                  </p>
+                </div>
+                <div className="text-[11px]">
+                  <div className="flex justify-between">
+                    <span>Sample Item</span>
+                    <span>Rp 25.000</span>
+                  </div>
+                  <p className="text-[11px]">
+                    --------------------------------
+                  </p>
+                  <div className="flex justify-between font-bold">
+                    <span>TOTAL</span>
+                    <span>Rp 25.000</span>
+                  </div>
+                </div>
+                <div className="mt-2 text-center text-[11px]">
+                  {previewFooterLines.length === 0 ? (
+                    <p className="italic text-muted-foreground">
+                      (footer kosong)
+                    </p>
+                  ) : (
+                    previewFooterLines.map((line, i) => <p key={i}>{line}</p>)
+                  )}
+                </div>
+              </div>
+            </div>
+          </TabsContent>
+        </Tabs>
+
         <DialogFooter>
           <Button
             type="button"

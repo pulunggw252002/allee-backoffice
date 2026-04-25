@@ -31,6 +31,18 @@ export async function GET(_req: Request, { params }: Ctx) {
   });
 }
 
+const ReceiptFooterInput = z.union([z.array(z.string()), z.string()]).optional();
+
+function normalizeReceiptFooter(input: unknown): string | null | undefined {
+  if (input === undefined) return undefined;
+  if (input === null || input === "") return null;
+  const arr = Array.isArray(input)
+    ? input
+    : String(input).split("\n");
+  const cleaned = arr.map((s) => s.trim()).filter(Boolean);
+  return cleaned.length === 0 ? null : JSON.stringify(cleaned);
+}
+
 const UpdateInput = z
   .object({
     name: z.string().min(1),
@@ -39,6 +51,10 @@ const UpdateInput = z
     phone: z.string(),
     opening_hours: z.string(),
     is_active: z.boolean(),
+    brand_name: z.string().nullish(),
+    brand_subtitle: z.string().nullish(),
+    receipt_footer: ReceiptFooterInput,
+    tax_id: z.string().nullish(),
   })
   .partial();
 
@@ -53,10 +69,14 @@ export async function PATCH(req: Request, { params }: Ctx) {
       .where(eq(schema.outlets.id, id))
       .get();
     if (!before) notFound("Outlet");
-    const input = await readJson(req, UpdateInput);
+    const raw = await readJson(req, UpdateInput);
+    const { receipt_footer, ...rest } = raw;
+    const update: Record<string, unknown> = { ...rest };
+    const rfNorm = normalizeReceiptFooter(receipt_footer);
+    if (rfNorm !== undefined) update.receipt_footer = rfNorm;
     await db
       .update(schema.outlets)
-      .set(input)
+      .set(update)
       .where(eq(schema.outlets.id, id));
     const after = await db
       .select()

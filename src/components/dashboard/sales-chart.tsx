@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { format, parseISO } from "date-fns";
+import { format, isValid, parseISO } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import type {
   DailySeriesPoint,
@@ -18,6 +18,21 @@ import type {
 import { formatIDR } from "@/lib/format";
 import { CHART_HEIGHT } from "@/lib/constants";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+
+/**
+ * Safe-parse a YYYY-MM-DD (or full ISO) string into a Date.
+ *
+ * Recharts' Tooltip can fire `labelFormatter` with `undefined`/empty input
+ * during transient loading or hover-near-edge states. `parseISO("")` returns
+ * an Invalid Date which then makes `format()` throw `RangeError: Invalid
+ * time value`. Returning `null` lets callers fall back to a literal label
+ * instead of crashing the chart.
+ */
+function safeParseDate(value: unknown): Date | null {
+  if (typeof value !== "string" || !value) return null;
+  const d = parseISO(value);
+  return isValid(d) ? d : null;
+}
 
 /**
  * Polymorphic sales trend chart.
@@ -72,11 +87,16 @@ export function SalesChart(props: DayProps | HourProps) {
             <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
             <XAxis
               dataKey={xKey}
-              tickFormatter={(v) =>
-                isHour
-                  ? `${String(v).padStart(2, "0")}:00`
-                  : format(parseISO(String(v)), "dd/MM", { locale: idLocale })
-              }
+              tickFormatter={(v) => {
+                if (isHour) {
+                  const h = Number(v);
+                  return Number.isFinite(h)
+                    ? `${String(h).padStart(2, "0")}:00`
+                    : "";
+                }
+                const d = safeParseDate(v);
+                return d ? format(d, "dd/MM", { locale: idLocale }) : "";
+              }}
               stroke="hsl(var(--muted-foreground))"
               fontSize={11}
               interval="preserveStartEnd"
@@ -95,15 +115,19 @@ export function SalesChart(props: DayProps | HourProps) {
                 borderRadius: 8,
                 fontSize: 12,
               }}
-              labelFormatter={(v) =>
-                isHour
-                  ? `Jam ${String(v).padStart(2, "0")}:00–${String(
-                      (Number(v) + 1) % 24,
-                    ).padStart(2, "0")}:00`
-                  : format(parseISO(String(v)), "dd MMM yyyy", {
-                      locale: idLocale,
-                    })
-              }
+              labelFormatter={(v) => {
+                if (isHour) {
+                  const h = Number(v);
+                  if (!Number.isFinite(h)) return "";
+                  return `Jam ${String(h).padStart(2, "0")}:00–${String(
+                    (h + 1) % 24,
+                  ).padStart(2, "0")}:00`;
+                }
+                const d = safeParseDate(v);
+                return d
+                  ? format(d, "dd MMM yyyy", { locale: idLocale })
+                  : String(v ?? "");
+              }}
               formatter={(value: number, name) => [
                 formatIDR(value),
                 name === "revenue" ? "Revenue" : "Profit",

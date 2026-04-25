@@ -9,7 +9,7 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { format, parseISO } from "date-fns";
+import { format, isValid, parseISO } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
 import {
   Card,
@@ -20,6 +20,15 @@ import {
 import { formatIDR } from "@/lib/format";
 import { CHART_HEIGHT } from "@/lib/constants";
 import type { DailySeriesPoint } from "@/lib/api/reports";
+
+// Safe-parse so Recharts' Tooltip + tick formatters don't crash with
+// `RangeError: Invalid time value` when data is loading or contains an
+// unexpected non-ISO label.
+function safeParseDate(value: unknown): Date | null {
+  if (typeof value !== "string" || !value) return null;
+  const d = parseISO(value);
+  return isValid(d) ? d : null;
+}
 
 export function DailyNetChart({
   data,
@@ -55,9 +64,10 @@ export function DailyNetChart({
             <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
             <XAxis
               dataKey="date"
-              tickFormatter={(d) =>
-                format(parseISO(d), "dd/MM", { locale: idLocale })
-              }
+              tickFormatter={(v) => {
+                const d = safeParseDate(v);
+                return d ? format(d, "dd/MM", { locale: idLocale }) : "";
+              }}
               stroke="hsl(var(--muted-foreground))"
               fontSize={11}
               interval={Math.max(0, Math.floor(days / 10))}
@@ -75,9 +85,12 @@ export function DailyNetChart({
                 borderRadius: 8,
                 fontSize: 12,
               }}
-              labelFormatter={(d) =>
-                format(parseISO(String(d)), "dd MMM yyyy", { locale: idLocale })
-              }
+              labelFormatter={(v) => {
+                const d = safeParseDate(v);
+                return d
+                  ? format(d, "dd MMM yyyy", { locale: idLocale })
+                  : String(v ?? "");
+              }}
               formatter={(value: number) => [formatIDR(value), "Net Sales"]}
             />
             <Area

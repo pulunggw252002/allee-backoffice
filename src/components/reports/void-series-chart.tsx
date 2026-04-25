@@ -11,8 +11,18 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
-import { format, parseISO } from "date-fns";
+import { format, isValid, parseISO } from "date-fns";
 import { id as idLocale } from "date-fns/locale";
+
+// Same defensive parser used in dashboard charts — Recharts can fire
+// formatters with empty/undefined input during loading and crash with
+// `RangeError: Invalid time value`. Returning null lets the formatter
+// render an empty label instead.
+function safeParseDate(value: unknown): Date | null {
+  if (typeof value !== "string" || !value) return null;
+  const d = parseISO(value);
+  return isValid(d) ? d : null;
+}
 import {
   Card,
   CardContent,
@@ -45,9 +55,10 @@ export function VoidSeriesChart({
             <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
             <XAxis
               dataKey="date"
-              tickFormatter={(d) =>
-                format(parseISO(d), "dd/MM", { locale: idLocale })
-              }
+              tickFormatter={(v) => {
+                const d = safeParseDate(v);
+                return d ? format(d, "dd/MM", { locale: idLocale }) : "";
+              }}
               stroke="hsl(var(--muted-foreground))"
               fontSize={11}
               interval={Math.max(0, Math.floor(days / 10))}
@@ -75,9 +86,12 @@ export function VoidSeriesChart({
                 borderRadius: 8,
                 fontSize: 12,
               }}
-              labelFormatter={(d) =>
-                format(parseISO(String(d)), "dd MMM yyyy", { locale: idLocale })
-              }
+              labelFormatter={(v) => {
+                const d = safeParseDate(v);
+                return d
+                  ? format(d, "dd MMM yyyy", { locale: idLocale })
+                  : String(v ?? "");
+              }}
               formatter={(value: number, name) => {
                 if (name === "loss") return [formatIDR(value), "Kerugian"];
                 return [formatNumber(value), "Jumlah Void"];

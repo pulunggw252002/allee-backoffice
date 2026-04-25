@@ -26,19 +26,8 @@ import "./_env";
 import { db, schema, client } from "../src/server/db/client";
 import { auth } from "../src/server/auth";
 import { buildSeed, DEMO_USER_PASSWORD } from "../src/lib/mock/seed";
+import { emailFromName } from "../src/lib/auth-email";
 import type { SQLiteTable } from "drizzle-orm/sqlite-core";
-
-function slugify(name: string): string {
-  return name
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[^\w]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-function emailFor(name: string): string {
-  return `${slugify(name)}@allee.local`;
-}
 
 /**
  * Chunked multi-row insert.
@@ -168,7 +157,7 @@ async function main() {
         userAuth: {
           id: `au_${u.id}`,
           name: u.name,
-          email: emailFor(u.name),
+          email: emailFromName(u.name),
           emailVerified: true,
           image: null,
           createdAt: now,

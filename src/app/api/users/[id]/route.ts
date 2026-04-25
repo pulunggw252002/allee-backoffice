@@ -3,15 +3,16 @@
  * PATCH  /api/users/:id  — update user + optionally rotate password (owner)
  * DELETE /api/users/:id  — soft-deactivate (owner)
  */
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/server/db/client";
 import { auth } from "@/server/auth";
 import { requireRole, requireSession } from "@/server/auth/session";
-import { handle, notFound, readJson } from "@/server/api/helpers";
+import { badRequest, handle, notFound, readJson } from "@/server/api/helpers";
 import { diffChanges, logAudit } from "@/server/api/audit";
 import { maskPin } from "@/server/api/user-utils";
 import { firePosSync } from "@/lib/webhooks/pos-sync";
+import { emailFromName } from "@/lib/auth-email";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -63,6 +64,48 @@ export async function PATCH(req: Request, { params }: Ctx) {
     const input = await readJson(req, UpdateInput);
     const { password, ...profile } = input;
 
+    // Locate the linked auth identity once — used for password updates AND
+    // for cascading the `name` change down to `user_auth.email/name` so
+    // login (which derives the email from the new name) keeps working.
+    const authRow = await db
+      .select()
+      .from(schema.user_auth)
+      .where(eq(schema.user_auth.domain_user_id, id))
+      .get();
+
+    if (
+      profile.name !== undefined &&
+      profile.name !== before.name &&
+      authRow
+    ) {
+      const nextEmail = emailFromName(profile.name);
+      // Reject if another user already uses the new email — SQLite has a
+      // UNIQUE on `user_auth.email`, but a friendly 400 is nicer than a 500.
+      const collision = await db
+        .select()
+        .from(schema.user_auth)
+        .where(
+          and(
+            eq(schema.user_auth.email, nextEmail),
+            ne(schema.user_auth.id, authRow.id),
+          ),
+        )
+        .get();
+      if (collision) {
+        badRequest(
+          `Nama "${profile.name}" sudah dipakai user lain. Pilih nama yang berbeda.`,
+        );
+      }
+      await db
+        .update(schema.user_auth)
+        .set({
+          name: profile.name,
+          email: nextEmail,
+          updatedAt: new Date(),
+        })
+        .where(eq(schema.user_auth.id, authRow.id));
+    }
+
     if (Object.keys(profile).length > 0) {
       await db.update(schema.users).set(profile).where(eq(schema.users.id, id));
     }
@@ -70,12 +113,6 @@ export async function PATCH(req: Request, { params }: Ctx) {
     if (password) {
       const ctx = await auth.$context;
       const hashed = await ctx.password.hash(password);
-      // Find the linked auth id and its credential account, then update.
-      const authRow = await db
-        .select()
-        .from(schema.user_auth)
-        .where(eq(schema.user_auth.domain_user_id, id))
-        .get();
       if (authRow) {
         await db
           .update(schema.account)

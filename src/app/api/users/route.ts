@@ -7,10 +7,11 @@ import { z } from "zod";
 import { db, schema } from "@/server/db/client";
 import { auth } from "@/server/auth";
 import { requireRole, requireSession, scopedOutletId } from "@/server/auth/session";
-import { genId, handle, nowIso, readJson } from "@/server/api/helpers";
+import { badRequest, genId, handle, nowIso, readJson } from "@/server/api/helpers";
 import { logAudit } from "@/server/api/audit";
 import { maskPin } from "@/server/api/user-utils";
 import { firePosSync } from "@/lib/webhooks/pos-sync";
+import { emailFromName } from "@/lib/auth-email";
 
 const ROLE_VALUES = [
   "owner",
@@ -42,22 +43,35 @@ const CreateInput = z.object({
   is_active: z.boolean().default(true),
 });
 
-function slug(s: string) {
-  return s
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[^\w]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
 export async function POST(req: Request) {
   return handle(async () => {
     const session = await requireSession();
     requireRole(session, ["owner"]);
     const input = await readJson(req, CreateInput);
 
+    // Login resolves name → email via the same `emailFromName()` helper.
+    // We MUST therefore use that helper here too — otherwise login lookups
+    // for the freshly-created user would miss the row entirely. Removing
+    // the previous random `-XXXX` suffix is the price of keeping the
+    // formula deterministic on both sides.
+    const email = emailFromName(input.name);
+
+    // Enforce uniqueness up front so the user gets a friendly error instead
+    // of a generic 500 from the SQLite UNIQUE constraint on
+    // `user_auth.email`. Names collide one-to-one with emails because the
+    // slug is deterministic.
+    const existing = await db
+      .select()
+      .from(schema.user_auth)
+      .where(eq(schema.user_auth.email, email))
+      .get();
+    if (existing) {
+      badRequest(
+        `Nama "${input.name}" sudah dipakai user lain. Pilih nama yang berbeda.`,
+      );
+    }
+
     const userId = genId("usr");
-    const email = `${slug(input.name)}-${userId.slice(-4)}@allee.local`;
 
     // Insert domain user first so the FK link on user_auth is valid.
     await db.insert(schema.users).values({

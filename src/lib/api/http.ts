@@ -77,12 +77,13 @@ async function request<T>(
   const text = await res.text();
   const parsed: unknown = text ? safeJson(text) : null;
   if (!res.ok) {
+    // Surface backend-provided messages so UI toasts can show meaningful
+    // text. Our route handlers return `{ error, details }` (see
+    // `src/server/api/helpers.ts`), but Better Auth and other libs use
+    // `{ message }` — accept both.
     const msg =
-      (typeof parsed === "object" &&
-        parsed !== null &&
-        "message" in parsed &&
-        typeof (parsed as { message: unknown }).message === "string" &&
-        (parsed as { message: string }).message) ||
+      pickStringField(parsed, "error") ||
+      pickStringField(parsed, "message") ||
       res.statusText ||
       "Request failed";
     throw new ApiError(res.status, msg, parsed);
@@ -96,6 +97,12 @@ function safeJson(text: string): unknown {
   } catch {
     return text;
   }
+}
+
+function pickStringField(value: unknown, key: string): string | null {
+  if (typeof value !== "object" || value === null) return null;
+  const v = (value as Record<string, unknown>)[key];
+  return typeof v === "string" && v.length > 0 ? v : null;
 }
 
 export const http = {

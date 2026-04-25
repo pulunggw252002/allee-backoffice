@@ -192,7 +192,10 @@ function UserDialog({
   });
 
   const [name, setName] = useState(initial?.name ?? "");
-  const [password, setPassword] = useState(initial?.password ?? "");
+  // Edit mode never pre-fills the password — the API masks the hash, and
+  // even if it didn't, leaving the field blank doubles as "leave password
+  // unchanged". Only on Create is it required.
+  const [password, setPassword] = useState("");
   const [role, setRole] = useState<Role>(initial?.role ?? "kasir");
   const [outletId, setOutletId] = useState<string | null>(
     initial?.outlet_id ?? null,
@@ -200,22 +203,33 @@ function UserDialog({
   const [contact, setContact] = useState(initial?.contact ?? "");
   const [isActive, setIsActive] = useState(initial?.is_active ?? true);
 
+  const isEdit = Boolean(initial);
+
   const saveMutation = useMutation({
     mutationFn: async () => {
       if (!name.trim()) throw new Error("Nama wajib diisi");
-      if (!password.trim()) throw new Error("Password wajib diisi");
+      if (!isEdit && !password.trim())
+        throw new Error("Password wajib diisi");
+      if (password && password.length < 4)
+        throw new Error("Password minimal 4 karakter");
       if (!isAllOutletsAllowed(role) && !outletId) throw new Error("Pilih outlet");
-      const payload = {
+      // On edit, omit the password key entirely if blank so the backend
+      // keeps the existing hash. Sending an empty string would fail Zod's
+      // `min(4)` validation.
+      const basePayload = {
         name: name.trim(),
-        password,
         role,
         outlet_id: isAllOutletsAllowed(role) ? null : outletId,
         contact: contact || undefined,
         is_active: isActive,
       };
-      return initial
-        ? usersApi.update(initial.id, payload)
-        : usersApi.create(payload);
+      if (isEdit) {
+        return usersApi.update(
+          initial!.id,
+          password ? { ...basePayload, password } : basePayload,
+        );
+      }
+      return usersApi.create({ ...basePayload, password });
     },
     onSuccess: () => {
       toast.success(initial ? "User diperbarui" : "User ditambahkan");
@@ -244,15 +258,23 @@ function UserDialog({
             />
           </div>
           <div className="space-y-2">
-            <Label>Password</Label>
+            <Label>
+              Password
+              {isEdit && (
+                <span className="ml-1 text-xs font-normal text-muted-foreground">
+                  (kosongkan jika tidak diubah)
+                </span>
+              )}
+            </Label>
             <Input
               type="text"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Password"
+              placeholder={isEdit ? "Biarkan kosong = password lama tetap" : "Minimal 4 karakter"}
+              autoComplete="new-password"
             />
             <p className="text-xs text-muted-foreground">
-              Demo: password disimpan plain-text di mock DB.
+              Password di-hash (scrypt) di server. Login pakai nama + password ini.
             </p>
           </div>
           <div className="grid gap-3 md:grid-cols-2">

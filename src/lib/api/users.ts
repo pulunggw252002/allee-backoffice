@@ -1,6 +1,7 @@
 import { appendAudit, diffChanges, getDb, mutate } from "@/lib/mock/db";
 import { uid } from "@/lib/utils";
 import { config } from "@/lib/config";
+import { emailFromName } from "@/lib/auth-email";
 import type { User } from "@/types";
 import { delay } from "./_latency";
 import { http } from "./http";
@@ -14,24 +15,6 @@ import { http } from "./http";
  */
 function maskPin(user: User): User {
   return { ...user, pos_pin: user.pos_pin ? "***" : null };
-}
-
-/**
- * Convert a display name ("Budi", "Dewi Barista") into the synthetic email the
- * backend issues on user create (`<slug>@allee.local`). Mirrors `slugify()` in
- * `scripts/seed.ts` so client-side login works with the same rules.
- */
-function slugifyName(name: string): string {
-  return name
-    .toLowerCase()
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9]+/g, ".")
-    .replace(/^\.+|\.+$/g, "");
-}
-
-function nameToEmail(name: string): string {
-  return `${slugifyName(name)}@allee.local`;
 }
 
 export async function list(): Promise<User[]> {
@@ -64,7 +47,7 @@ export async function authenticate(
 ): Promise<User | null> {
   if (config.api.useRealBackend) {
     try {
-      const email = nameToEmail(name);
+      const email = emailFromName(name);
       const res = await fetch("/api/auth/sign-in/email", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },

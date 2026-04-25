@@ -265,7 +265,8 @@ export type AuditAction =
   | "opname"
   | "login"
   | "check_in"
-  | "check_out";
+  | "check_out"
+  | "void";
 
 export type AuditEntity =
   | "menu"
@@ -284,7 +285,8 @@ export type AuditEntity =
   | "sales_target"
   | "ojol_channel"
   | "menu_channel_listing"
-  | "pos_pin";
+  | "pos_pin"
+  | "transaction";
 
 export interface AuditChange {
   field: string;

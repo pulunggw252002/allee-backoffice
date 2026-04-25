@@ -53,7 +53,14 @@ export function DateRangePicker({
 
   const handleCustom = (key: "start" | "end", dateStr: string) => {
     setPreset("custom");
-    const d = new Date(dateStr);
+    if (!dateStr) return;
+    // `new Date("YYYY-MM-DD")` di-parse sebagai UTC midnight — di timezone
+    // negatif (US) ini menggeser calendar day mundur sehari. Force parsing
+    // sebagai local time dengan menambah "T00:00:00", lalu setHours kalibrasi
+    // ulang. Indonesia UTC+7 tidak terpengaruh, tapi defensive supaya laporan
+    // tetap benar kalau backoffice diakses dari luar negeri.
+    const d = new Date(`${dateStr}T00:00:00`);
+    if (Number.isNaN(d.getTime())) return;
     if (key === "end") d.setHours(23, 59, 59, 999);
     else d.setHours(0, 0, 0, 0);
     onChange({ ...value, [key]: d.toISOString() });

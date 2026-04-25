@@ -40,7 +40,11 @@ const Input = z.object({
 export async function POST(req: Request, { params }: Ctx) {
   return handle(async () => {
     const session = await requireSession();
-    requireRole(session, ["owner", "kepala_toko"]);
+    // Void datang dari POS (kasir / kepala_toko / owner). Kasir butuh akses
+    // supaya bisa flag staff-error langsung tanpa harus tunggu kepala toko.
+    // Audit log mencatat siapa yang void supaya owner bisa review pola yang
+    // mencurigakan di laporan Void.
+    requireRole(session, ["owner", "kepala_toko", "kasir"]);
     const { id } = await params;
     const tx = await db
       .select()
@@ -48,6 +52,14 @@ export async function POST(req: Request, { params }: Ctx) {
       .where(eq(schema.transactions.id, id))
       .get();
     if (!tx) notFound("Transaction");
+    // Cross-outlet guard: non-owner tidak boleh void transaksi outlet lain.
+    if (
+      session.domainUser.role !== "owner" &&
+      session.domainUser.outlet_id &&
+      tx.outlet_id !== session.domainUser.outlet_id
+    ) {
+      notFound("Transaction");
+    }
     if (tx.status === "void") badRequest("Transaction sudah void");
     if (tx.status !== "paid")
       badRequest("Hanya transaksi 'paid' yang bisa di-void");
@@ -64,8 +76,8 @@ export async function POST(req: Request, { params }: Ctx) {
       .where(eq(schema.transactions.id, id));
 
     await logAudit(session, {
-      action: "update",
-      entity: "session",
+      action: "void",
+      entity: "transaction",
       entity_id: id,
       entity_name: `Transaksi #${id.slice(-6)}`,
       outlet_id: tx.outlet_id,

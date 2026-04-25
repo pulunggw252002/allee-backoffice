@@ -46,6 +46,8 @@ const ENTITY_OPTIONS: Array<{ value: AuditEntity | "all"; label: string }> = [
   { value: "user", label: "User" },
   { value: "outlet", label: "Outlet" },
   { value: "category", label: "Kategori" },
+  { value: "transaction", label: "Transaksi" },
+  { value: "attendance", label: "Absensi" },
   { value: "session", label: "Sesi" },
 ];
 
@@ -60,6 +62,7 @@ const ACTION_OPTIONS: Array<{ value: AuditAction | "all"; label: string }> = [
   { value: "login", label: "Login" },
   { value: "check_in", label: "Absen Masuk" },
   { value: "check_out", label: "Absen Pulang" },
+  { value: "void", label: "Void Order" },
 ];
 
 const ACTION_BADGE: Record<
@@ -75,6 +78,7 @@ const ACTION_BADGE: Record<
   login: { label: "Login", variant: "outline" },
   check_in: { label: "Masuk", variant: "success" },
   check_out: { label: "Pulang", variant: "secondary" },
+  void: { label: "Void", variant: "danger" },
 };
 
 function renderValue(v: unknown): string {

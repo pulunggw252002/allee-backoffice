@@ -1,8 +1,8 @@
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/server/db/client";
 import { requireRole, requireSession } from "@/server/auth/session";
-import { handle, notFound, nowIso, readJson } from "@/server/api/helpers";
+import { badRequest, handle, notFound, nowIso, readJson } from "@/server/api/helpers";
 import { diffChanges, logAudit } from "@/server/api/audit";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -27,6 +27,27 @@ export async function PATCH(req: Request, { params }: Ctx) {
       .get();
     if (!before) notFound("Sales target");
     const input = await readJson(req, Update);
+    // Kalau user ubah (year, month), pastikan tidak collide dengan row lain.
+    const targetYear = input.year ?? before.year;
+    const targetMonth = input.month ?? before.month;
+    if (targetYear !== before.year || targetMonth !== before.month) {
+      const dup = await db
+        .select({ id: schema.sales_targets.id })
+        .from(schema.sales_targets)
+        .where(
+          and(
+            eq(schema.sales_targets.year, targetYear),
+            eq(schema.sales_targets.month, targetMonth),
+            ne(schema.sales_targets.id, id),
+          ),
+        )
+        .get();
+      if (dup) {
+        badRequest(
+          `Target untuk ${targetYear}-${String(targetMonth).padStart(2, "0")} sudah ada.`,
+        );
+      }
+    }
     await db
       .update(schema.sales_targets)
       .set({ ...input, updated_at: nowIso() })

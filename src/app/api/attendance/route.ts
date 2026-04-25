@@ -6,7 +6,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/server/db/client";
 import { requireSession, scopedOutletId } from "@/server/auth/session";
-import { genId, handle, nowIso, readJson } from "@/server/api/helpers";
+import { badRequest, genId, handle, nowIso, readJson } from "@/server/api/helpers";
 import { logAudit } from "@/server/api/audit";
 import { stationForRole } from "@/types";
 
@@ -50,6 +50,22 @@ export async function POST(req: Request) {
     const { domainUser } = session;
     if (!domainUser.outlet_id) {
       throw new Error("User tidak ter-assign ke outlet manapun");
+    }
+    // Idempotency: tolak double check-in di hari yang sama untuk user yang
+    // sama. Tanpa guard ini, network retry dari POS bisa bikin 2-3 row
+    // attendance untuk satu shift, dan laporan kehadiran jadi ambigu.
+    const existing = await db
+      .select({ id: schema.attendance.id })
+      .from(schema.attendance)
+      .where(
+        and(
+          eq(schema.attendance.user_id, domainUser.id),
+          eq(schema.attendance.date, input.date),
+        ),
+      )
+      .get();
+    if (existing) {
+      badRequest(`Sudah check-in untuk tanggal ${input.date}`);
     }
     const row = {
       id: genId("att"),

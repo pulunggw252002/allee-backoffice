@@ -5,7 +5,7 @@ import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/server/db/client";
 import { requireSession } from "@/server/auth/session";
-import { handle, notFound, nowIso, readJson } from "@/server/api/helpers";
+import { badRequest, handle, notFound, nowIso, readJson } from "@/server/api/helpers";
 import { logAudit } from "@/server/api/audit";
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -33,6 +33,24 @@ export async function POST(req: Request, { params }: Ctx) {
       .where(eq(schema.attendance.id, id))
       .get();
     if (!att) notFound("Attendance");
+    // Cross-user guard: kasir/barista hanya boleh checkout record sendiri,
+    // owner boleh untuk siapa saja (override administratif). Kepala toko
+    // boleh untuk staff di outlet-nya.
+    if (
+      session.domainUser.role !== "owner" &&
+      att.user_id !== session.domainUser.id &&
+      !(
+        session.domainUser.role === "kepala_toko" &&
+        att.outlet_id === session.domainUser.outlet_id
+      )
+    ) {
+      notFound("Attendance");
+    }
+    // Idempotency: tolak double checkout. Network retry tidak boleh menimpa
+    // checkout time yang sudah tercatat — itu menghapus durasi shift asli.
+    if (att.check_out_at) {
+      badRequest("Sudah check-out untuk attendance ini");
+    }
     const input = await readJson(req, Input);
     await db
       .update(schema.attendance)

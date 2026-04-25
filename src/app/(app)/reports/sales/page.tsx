@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { differenceInCalendarDays, parseISO } from "date-fns";
 import { useQuery } from "@tanstack/react-query";
 import { reportsApi, transactionsApi } from "@/lib/api";
 import { useOutletStore } from "@/stores/outlet-store";
@@ -42,16 +43,15 @@ export default function SalesReportPage() {
   });
 
   // Determine the chart granularity from the picked range. Single-day
-  // windows (preset "Hari ini" or any custom 1-day pick) get hourly bars
-  // so the chart isn't a single point; multi-day windows use the regular
-  // daily series. The cutoff is "<= 1 day" because `(end-start)/86400000`
-  // for a today-window is ~0.999, so we ceil to 1.
+  // windows (preset "Hari ini" atau custom 1-hari) dapat hourly bars
+  // supaya chart tidak satu titik; multi-day windows pakai series harian.
+  //
+  // Pakai `differenceInCalendarDays` (date-fns) supaya stabil di boundary
+  // DST — millisecond arithmetic langsung bisa off-by-one saat range
+  // melewati transisi DST. Indonesia tidak DST, tapi tetap defensive.
   const diffDays = Math.max(
     1,
-    Math.ceil(
-      (new Date(range.end).getTime() - new Date(range.start).getTime()) /
-        86400000,
-    ),
+    differenceInCalendarDays(parseISO(range.end), parseISO(range.start)) + 1,
   );
   const isSingleDay = diffDays <= 1;
 

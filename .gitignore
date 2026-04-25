@@ -17,3 +17,5 @@ data/*.db-wal
 
 # TypeScript incremental build info
 *.tsbuildinfo
+
+.vercel

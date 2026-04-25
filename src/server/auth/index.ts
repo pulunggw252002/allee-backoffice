@@ -33,8 +33,32 @@ function requireSecret(): string {
   return secret;
 }
 
+/**
+ * Resolve the public base URL for Better Auth.
+ *
+ * Priority:
+ *   1. `BETTER_AUTH_URL` — explicit override (what custom domains use).
+ *   2. `VERCEL_PROJECT_PRODUCTION_URL` — stable prod URL Vercel auto-injects;
+ *      doesn't change between deploys.
+ *   3. `VERCEL_URL` — per-deployment URL (preview/branch deploys).
+ *   4. `http://localhost:3000` — local dev fallback.
+ *
+ * Cookies are bound to this origin, so it must match what the browser sees.
+ * On a custom domain you MUST set `BETTER_AUTH_URL` explicitly — otherwise
+ * Better Auth would fall back to the *.vercel.app host and cookies would
+ * never reach the canonical domain.
+ */
+function resolveBaseURL(): string {
+  if (process.env.BETTER_AUTH_URL) return process.env.BETTER_AUTH_URL;
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+  }
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  return "http://localhost:3000";
+}
+
 export const auth = betterAuth({
-  baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:3000",
+  baseURL: resolveBaseURL(),
   secret: requireSecret(),
   database: drizzleAdapter(db, {
     provider: "sqlite",

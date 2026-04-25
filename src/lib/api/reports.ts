@@ -130,29 +130,100 @@ export interface DailySeriesPoint {
   net_sales: number;
 }
 
+/**
+ * Resolve a `{days}` or `{start, end}` window into a concrete start/end pair.
+ *
+ * The backend route `/api/reports/daily-series` only honors `start`/`end`
+ * query params — it ignores `days`. The previous client used to pass `days`
+ * which caused the route to return *every* paid transaction in the database
+ * (no date filter), producing 12-month-spanning charts on dashboards that
+ * meant to show 7-day windows. This helper centralises the translation so
+ * both the mock and real backend see the exact same window.
+ */
+function resolveDailyWindow(input: {
+  days?: number;
+  start?: string;
+  end?: string;
+}): { start: string; end: string; dayCount: number } {
+  if (input.start && input.end) {
+    const startMs = new Date(input.start).getTime();
+    const endMs = new Date(input.end).getTime();
+    const dayCount = Math.max(
+      1,
+      Math.ceil((endMs - startMs) / 86400000),
+    );
+    return { start: input.start, end: input.end, dayCount };
+  }
+  const days = input.days ?? 7;
+  const end = new Date();
+  end.setHours(23, 59, 59, 999);
+  const start = new Date(end);
+  start.setDate(start.getDate() - days + 1);
+  start.setHours(0, 0, 0, 0);
+  return {
+    start: start.toISOString(),
+    end: end.toISOString(),
+    dayCount: days,
+  };
+}
+
 export async function dailySeries(params: {
   outlet_id?: string | null;
   days?: number;
+  start?: string;
+  end?: string;
 }): Promise<DailySeriesPoint[]> {
+  const window = resolveDailyWindow(params);
   if (config.api.useRealBackend) {
-    return http.get<DailySeriesPoint[]>(`/api/reports/daily-series${qs(params)}`);
+    // Always pass start/end — `days` alone is dropped by the backend.
+    const rows = await http.get<
+      Array<{
+        date: string;
+        revenue: number;
+        hpp?: number;
+        profit?: number;
+        count?: number;
+      }>
+    >(
+      `/api/reports/daily-series${qs({
+        outlet_id: params.outlet_id,
+        start: window.start,
+        end: window.end,
+      })}`,
+    );
+    // Backfill empty days so the chart shows a continuous axis even when
+    // some days have zero sales (otherwise Recharts collapses the gap and
+    // makes 7-day charts look like 3-day charts on slow days).
+    const byDate = new Map(rows.map((r) => [r.date, r] as const));
+    const start = new Date(window.start);
+    start.setHours(0, 0, 0, 0);
+    const out: DailySeriesPoint[] = [];
+    for (let i = 0; i < window.dayCount; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      const key = d.toISOString().slice(0, 10);
+      const r = byDate.get(key);
+      out.push({
+        date: key,
+        revenue: r?.revenue ?? 0,
+        profit: r?.profit ?? 0,
+        net_sales: r?.revenue ?? 0,
+      });
+    }
+    return out;
   }
   const db = getDb();
-  const days = params.days ?? 7;
-  const now = new Date();
-  now.setHours(23, 59, 59, 999);
-  const start = new Date(now);
-  start.setDate(start.getDate() - days + 1);
-  start.setHours(0, 0, 0, 0);
   const items = filterTx(db.transactions, {
     outlet_id: params.outlet_id,
-    start: start.toISOString(),
-    end: now.toISOString(),
+    start: window.start,
+    end: window.end,
   }).filter(isPaid);
   const buckets = new Map<string, DailySeriesPoint>();
-  for (let i = 0; i < days; i++) {
-    const d = new Date(start);
-    d.setDate(start.getDate() + i);
+  const startDate = new Date(window.start);
+  startDate.setHours(0, 0, 0, 0);
+  for (let i = 0; i < window.dayCount; i++) {
+    const d = new Date(startDate);
+    d.setDate(startDate.getDate() + i);
     const key = d.toISOString().slice(0, 10);
     buckets.set(key, { date: key, revenue: 0, profit: 0, net_sales: 0 });
   }
@@ -169,6 +240,55 @@ export async function dailySeries(params: {
     bucket.net_sales += t.subtotal - t.discount_total;
   }
   return delay(Array.from(buckets.values()));
+}
+
+export interface HourlySeriesPoint {
+  /** 0..23 */
+  hour: number;
+  revenue: number;
+  profit: number;
+  net_sales: number;
+  transaction_count: number;
+}
+
+/**
+ * Hourly buckets across an arbitrary window — caller usually passes a
+ * single-day window so the chart shows 24 bars/lines for that day, but it
+ * also works for multi-day windows (sums same-hour buckets across days,
+ * useful for "peak hour" insight). Returns an array of length 24 always —
+ * empty hours have zero values to keep the X-axis continuous.
+ */
+export async function hourlySeries(params: {
+  outlet_id?: string | null;
+  start: string;
+  end: string;
+}): Promise<HourlySeriesPoint[]> {
+  if (config.api.useRealBackend) {
+    return http.get<HourlySeriesPoint[]>(
+      `/api/reports/hourly-series${qs(params)}`,
+    );
+  }
+  const db = getDb();
+  const paid = filterTx(db.transactions, params).filter(isPaid);
+  const buckets: HourlySeriesPoint[] = Array.from({ length: 24 }, (_, h) => ({
+    hour: h,
+    revenue: 0,
+    profit: 0,
+    net_sales: 0,
+    transaction_count: 0,
+  }));
+  for (const t of paid) {
+    const h = new Date(t.created_at).getHours();
+    const thpp = t.items.reduce(
+      (s, it) => s + it.hpp_snapshot * it.quantity,
+      0,
+    );
+    buckets[h].revenue += t.subtotal;
+    buckets[h].profit += t.subtotal - thpp - t.discount_total;
+    buckets[h].net_sales += t.subtotal - t.discount_total;
+    buckets[h].transaction_count += 1;
+  }
+  return delay(buckets);
 }
 
 export interface TopMenuRow {

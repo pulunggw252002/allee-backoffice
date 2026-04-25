@@ -580,7 +580,10 @@ function OwnerDashboard() {
           {loadingSeries ? (
             <Skeleton className={DASHBOARD_SKELETON.chartMedium} />
           ) : (
-            <SalesChart data={series} days={DASHBOARD_TREND_DAYS} />
+            <SalesChart
+              data={series}
+              windowLabel={`${DASHBOARD_TREND_DAYS} Hari`}
+            />
           )}
         </div>
         <TopMenuList data={topMenus} />

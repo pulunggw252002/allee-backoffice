@@ -41,6 +41,11 @@ export default function SalesReportPage() {
       }),
   });
 
+  // Determine the chart granularity from the picked range. Single-day
+  // windows (preset "Hari ini" or any custom 1-day pick) get hourly bars
+  // so the chart isn't a single point; multi-day windows use the regular
+  // daily series. The cutoff is "<= 1 day" because `(end-start)/86400000`
+  // for a today-window is ~0.999, so we ceil to 1.
   const diffDays = Math.max(
     1,
     Math.ceil(
@@ -48,16 +53,39 @@ export default function SalesReportPage() {
         86400000,
     ),
   );
-  const seriesDays = Math.min(diffDays, 90);
+  const isSingleDay = diffDays <= 1;
 
   const { data: series = [] } = useQuery({
-    queryKey: ["report.sales.series", outletId, seriesDays],
+    queryKey: ["report.sales.series", outletId, range.start, range.end],
     queryFn: () =>
       reportsApi.dailySeries({
         outlet_id: outletId,
-        days: seriesDays,
+        start: range.start,
+        end: range.end,
       }),
+    enabled: !isSingleDay,
   });
+
+  const { data: hourlySeries = [] } = useQuery({
+    queryKey: ["report.sales.hourly", outletId, range.start, range.end],
+    queryFn: () =>
+      reportsApi.hourlySeries({
+        outlet_id: outletId,
+        start: range.start,
+        end: range.end,
+      }),
+    enabled: isSingleDay,
+  });
+
+  // Title hint for the chart card. Day-resolution shows "<n> Hari" or the
+  // explicit date range for custom picks; hour-resolution shows the date.
+  const chartWindowLabel = isSingleDay
+    ? new Date(range.start).toLocaleDateString("id-ID", {
+        day: "2-digit",
+        month: "short",
+        year: "numeric",
+      })
+    : `${diffDays} Hari`;
 
   const { data: transactions = [] } = useQuery({
     queryKey: ["report.sales.tx", outletId, range.start, range.end],
@@ -146,7 +174,15 @@ export default function SalesReportPage() {
         </Card>
       </div>
 
-      <SalesChart data={series} days={seriesDays} />
+      {isSingleDay ? (
+        <SalesChart
+          mode="hour"
+          data={hourlySeries}
+          windowLabel={chartWindowLabel}
+        />
+      ) : (
+        <SalesChart data={series} windowLabel={chartWindowLabel} />
+      )}
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>

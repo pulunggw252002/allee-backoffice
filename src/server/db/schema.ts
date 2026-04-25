@@ -450,6 +450,45 @@ export const tax_settings = sqliteTable("tax_settings", {
     .default(sql`(current_timestamp)`),
 });
 
+/**
+ * POS shift summaries — append-only audit table yang di-isi oleh POS
+ * setiap kali kasir tutup shift (POST /api/pos-shifts dari POS).
+ *
+ * Bukan source of truth untuk transaksi (itu `transactions`). Tabel ini
+ * murni summary per-cashier per-shift untuk laporan "rekap kas":
+ *   - opening_cash, expected_cash, actual_cash → cash difference
+ *   - breakdown method → cocokin dengan revenue dari transactions
+ *
+ * Idempotency: PK = shift id POS, jadi POST ulang dengan id sama (retry)
+ * cukup di-update — tidak akan double-insert.
+ */
+export const pos_shifts = sqliteTable("pos_shifts", {
+  id: text("id").primaryKey(),
+  outlet_id: text("outlet_id")
+    .notNull()
+    .references(() => outlets.id, { onDelete: "restrict" }),
+  cashier_user_id: text("cashier_user_id").notNull(),
+  cashier_name: text("cashier_name").notNull(),
+  opening_cash: real("opening_cash").notNull().default(0),
+  actual_cash: real("actual_cash").notNull().default(0),
+  expected_cash: real("expected_cash").notNull().default(0),
+  cash_difference: real("cash_difference").notNull().default(0),
+  total_revenue: real("total_revenue").notNull().default(0),
+  order_count: integer("order_count").notNull().default(0),
+  /** JSON: { cash, qris, card, transfer } */
+  breakdown: text("breakdown", { mode: "json" })
+    .$type<Record<string, number>>()
+    .notNull()
+    .default({}),
+  note: text("note"),
+  opened_at: text("opened_at").notNull(),
+  closed_at: text("closed_at").notNull(),
+  /** Server timestamp saat row di-insert/upsert. */
+  synced_at: text("synced_at")
+    .notNull()
+    .default(sql`(current_timestamp)`),
+});
+
 export const sales_targets = sqliteTable("sales_targets", {
   id: text("id").primaryKey(),
   year: integer("year").notNull(),

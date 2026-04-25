@@ -21,6 +21,7 @@ import {
   readJson,
 } from "@/server/api/helpers";
 import { logAudit } from "@/server/api/audit";
+import { firePosSync } from "@/lib/webhooks/pos-sync";
 
 export async function GET(req: Request) {
   return handle(async () => {
@@ -117,6 +118,18 @@ export async function POST(req: Request) {
       outlet_id: input.outlet_id,
       notes: `${input.type} ${input.quantity} ${ing.unit}`,
     });
+
+    // Stock movement mengubah `current_stock` & berpotensi `unit_price` (lewat
+    // weighted-average di logic adjustment manual). Itu invalidate HPP cache
+    // di menu yang pakai bahan ini → POS perlu re-sync supaya hpp_snapshot
+    // saat push transaksi tetap akurat. Best-effort, non-blocking.
+    void firePosSync({
+      entity: "ingredient",
+      event: "updated",
+      entity_id: input.ingredient_id,
+      outlet_id: input.outlet_id,
+    });
+
     return row;
   });
 }

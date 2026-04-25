@@ -213,6 +213,7 @@ const users: User[] = [
     contact: "+62 812 1111 2222",
     is_active: true,
     joined_at: "2024-11-01",
+    pos_pin: "1001",
   },
   {
     id: "usr_andi",
@@ -223,6 +224,7 @@ const users: User[] = [
     contact: "+62 812 3333 4444",
     is_active: true,
     joined_at: "2024-11-05",
+    pos_pin: "2002",
   },
   {
     id: "usr_siti",
@@ -233,6 +235,7 @@ const users: User[] = [
     contact: "+62 812 5555 6666",
     is_active: true,
     joined_at: "2025-02-20",
+    pos_pin: "2003",
   },
   {
     id: "usr_rudi",
@@ -242,6 +245,7 @@ const users: User[] = [
     outlet_id: "out_dago",
     is_active: true,
     joined_at: "2024-12-01",
+    pos_pin: "3004",
   },
   {
     id: "usr_dewi",
@@ -251,6 +255,7 @@ const users: User[] = [
     outlet_id: "out_dago",
     is_active: true,
     joined_at: "2024-12-10",
+    pos_pin: "4005",
   },
   {
     id: "usr_joni",
@@ -260,6 +265,7 @@ const users: User[] = [
     outlet_id: "out_pim",
     is_active: true,
     joined_at: "2025-03-01",
+    pos_pin: "5006",
   },
   {
     id: "usr_mira",
@@ -269,6 +275,7 @@ const users: User[] = [
     outlet_id: "out_pim",
     is_active: true,
     joined_at: "2025-03-05",
+    pos_pin: "6007",
   },
 ];
 

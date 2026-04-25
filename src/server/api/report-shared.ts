@@ -5,8 +5,8 @@
  * `outlet_id` is clamped by `scopedOutletId()` so kepala_toko can't read
  * other outlets' data.
  */
-import { and, eq, gte, lte, type SQL } from "drizzle-orm";
-import { schema } from "@/server/db/client";
+import { and, eq, gte, inArray, lte, type SQL } from "drizzle-orm";
+import { db, schema } from "@/server/db/client";
 import type { ServerSession } from "@/server/auth/session";
 import { scopedOutletId } from "@/server/auth/session";
 import { badRequest } from "./helpers";
@@ -55,4 +55,55 @@ export function txWhereClauses(params: ReportParams): SQL | undefined {
   if (params.start) arr.push(gte(schema.transactions.created_at, params.start));
   if (params.end) arr.push(lte(schema.transactions.created_at, params.end));
   return arr.length === 0 ? undefined : and(...arr);
+}
+
+/**
+ * Hitung "net revenue" per tx dengan menghormati per-item void.
+ *
+ * Untuk setiap tx di `txIds`, ambil semua `transaction_items`-nya, jumlahkan
+ * subtotal item yang **belum** di-void, lalu kurangi `discount_total` tx itu
+ * (kalau masih ada item aktif). Kalau seluruh struk void, net = 0 (tidak
+ * boleh negatif via diskon yang masih ter-apply).
+ *
+ * Return: `Map<txId, netAmount>`. Tx tanpa item aktif tetap masuk map dengan
+ * nilai 0 supaya caller tahu tx itu sudah dilihat (tidak bingung "kemana
+ * struknya").
+ *
+ * Pakai helper ini di report yang cuma mau "net per tx" tanpa peduli HPP —
+ * mis. payment-breakdown, order-type-breakdown, weekly-net, monthly-target,
+ * year-comparison. Report yang juga butuh HPP (summary, daily-series, dst)
+ * tetap pakai pola load items + reduce sendiri supaya menghemat satu pass.
+ */
+export async function loadNetByTx(
+  txs: Array<{ id: string; discount_total: number }>,
+): Promise<Map<string, number>> {
+  if (txs.length === 0) return new Map();
+  const items = await db
+    .select({
+      transaction_id: schema.transaction_items.transaction_id,
+      subtotal: schema.transaction_items.subtotal,
+      voided_at: schema.transaction_items.voided_at,
+    })
+    .from(schema.transaction_items)
+    .where(
+      inArray(
+        schema.transaction_items.transaction_id,
+        txs.map((t) => t.id),
+      ),
+    )
+    .all();
+  const activeSub = new Map<string, number>();
+  for (const i of items) {
+    if (i.voided_at !== null) continue;
+    activeSub.set(
+      i.transaction_id,
+      (activeSub.get(i.transaction_id) ?? 0) + i.subtotal,
+    );
+  }
+  const out = new Map<string, number>();
+  for (const t of txs) {
+    const sub = activeSub.get(t.id) ?? 0;
+    out.set(t.id, sub > 0 ? sub - t.discount_total : 0);
+  }
+  return out;
 }

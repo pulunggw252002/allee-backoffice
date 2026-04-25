@@ -226,6 +226,17 @@ export interface TransactionItem {
   hpp_snapshot: number;
   subtotal: number;
   addons: TransactionItemAddon[];
+  /**
+   * Per-item void (granularity baru): ISO timestamp saat item ini di-void.
+   * Item dengan `voided_at` non-null TIDAK dihitung di revenue, tapi tetap
+   * meninggalkan jejak (HPP, atribusi user, alasan) untuk laporan Void.
+   * Stok TIDAK direstore — bahan yang sudah dipakai dianggap loss operasional.
+   */
+  voided_at?: string | null;
+  /** ID user yang menandai item ini void. */
+  voided_by?: string | null;
+  /** Alasan void (template ATAU komentar bebas, max 500 char). */
+  void_reason?: string | null;
 }
 
 export interface TransactionItemAddon {

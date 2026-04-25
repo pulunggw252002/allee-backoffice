@@ -1,14 +1,12 @@
 /**
  * GET /api/reports/hourly-series?outlet_id=&start=&end=
  *
- * Like `/api/reports/hourly-net` but emits the same shape the dashboard
- * line chart needs: { hour, revenue, profit, net_sales, transaction_count }.
- * Used by the Sales report chart when the operator picks "Hari ini" — we
- * switch from per-day to per-hour granularity so the chart isn't a single
- * dot.
+ * Per-hour bucket: { hour, revenue, profit, net_sales, transaction_count }.
+ * Dipakai oleh dashboard line chart saat operator pilih "Hari ini" — granular
+ * per-jam supaya chart tidak jadi satu titik.
  *
- * Buckets are always length-24 with zero defaults so the X-axis is
- * continuous even for sparse hours.
+ * Per-item void aware: item ber-`voided_at` di-exclude dari revenue/HPP.
+ * Bucket selalu length-24 dengan nilai default 0 supaya sumbu X kontinu.
  */
 import { and, eq, inArray } from "drizzle-orm";
 import { db, schema } from "@/server/db/client";
@@ -44,10 +42,15 @@ export async function GET(req: Request) {
               ),
             )
             .all();
+    const activeItems = items.filter((i) => i.voided_at === null);
 
-    // Pre-bucket HPP per transaction so we don't do an O(n*m) lookup later.
+    const subByTx = new Map<string, number>();
     const hppByTx = new Map<string, number>();
-    for (const i of items) {
+    for (const i of activeItems) {
+      subByTx.set(
+        i.transaction_id,
+        (subByTx.get(i.transaction_id) ?? 0) + i.subtotal,
+      );
       hppByTx.set(
         i.transaction_id,
         (hppByTx.get(i.transaction_id) ?? 0) + i.hpp_snapshot * i.quantity,
@@ -63,10 +66,11 @@ export async function GET(req: Request) {
     }));
     for (const t of txs) {
       const h = new Date(t.created_at).getHours();
-      const net = t.subtotal - t.discount_total;
+      const sub = subByTx.get(t.id) ?? 0;
+      const net = sub > 0 ? sub - t.discount_total : 0;
       const hpp = hppByTx.get(t.id) ?? 0;
-      buckets[h].revenue += t.subtotal;
-      buckets[h].profit += t.subtotal - hpp - t.discount_total;
+      buckets[h].revenue += sub;
+      buckets[h].profit += net - hpp;
       buckets[h].net_sales += net;
       buckets[h].transaction_count += 1;
     }

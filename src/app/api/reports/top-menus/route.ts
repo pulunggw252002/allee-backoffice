@@ -1,6 +1,10 @@
 /**
  * GET /api/reports/top-menus?outlet_id=&start=&end=&limit=5&order=desc|asc
- * Menus ranked by quantity sold. `order=asc` returns bottom-N (fewest sold).
+ *
+ * Menu di-rank berdasar quantity terjual. `order=asc` mengembalikan
+ * bottom-N (paling sedikit terjual). Per-item void aware: item dengan
+ * `voided_at !== null` di-exclude — yang dilaporkan adalah item yang
+ * benar-benar sampai ke pelanggan & menghasilkan revenue.
  */
 import { and, eq, inArray } from "drizzle-orm";
 import { db, schema } from "@/server/db/client";
@@ -47,6 +51,7 @@ export async function GET(req: Request) {
     >();
     for (const i of items) {
       if (!i.menu_id) continue;
+      if (i.voided_at !== null) continue;
       const row = map.get(i.menu_id) ?? {
         menu_id: i.menu_id,
         name: i.name_snapshot,

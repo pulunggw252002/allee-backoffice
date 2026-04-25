@@ -1,22 +1,21 @@
 /**
- * POST /api/transactions/:id/void
+ * POST /api/transactions/:id/void  — shortcut "void semua item di struk".
  *
- * Mark a paid transaction as voided (staff-error: order sudah dibuat, stok
- * terpotong, tapi pelanggan menolak). Flipping status to "void" removes the
- * revenue from sales reports while keeping the stock movement + HPP in place
- * as an operational loss — matches the frontend void-report semantics.
+ * Semantik baru (April 2026): void granular per **item**. Endpoint ini
+ * sekarang menjadi convenience: kasir di POS yang mau membatalkan seluruh
+ * struk bisa hit endpoint ini sekali dan semua item akan ter-void dengan
+ * `reason` yang sama. Per-item void tersedia di
+ * `POST /api/transactions/:id/items/:itemId/void`.
  *
- * `reason` adalah free-form string yang diinput operator di POS — bisa berupa
- * pilihan template (mis. "Salah menu") ATAU komentar bebas yang dia ketik
- * sendiri (mis. "Pelanggan tiba-tiba ganti pesanan jadi minuman dingin"). DB
- * menyimpan apa pun yang dikirim apa adanya supaya laporan void mencerminkan
- * konteks asli dari kasir, bukan bucket enum yang membatasi nuance.
+ * `reason` tetap free-form string (template pilihan ATAU komentar bebas).
+ * Stok TIDAK direstore — bahan sudah dipakai dianggap kerugian operasional.
  *
- * Backoffice tidak memanggil endpoint ini sendiri — semua void berasal dari
- * POS. Endpoint ini ada di backoffice supaya POS punya satu sumber backend
- * yang sama untuk audit & report.
+ * Backward-compat: `transactions.status` tetap dibiarkan `"paid"` setelah
+ * void (sebelumnya di-flip ke `"void"`). Laporan Void mengambil dari
+ * `transaction_items.voided_at`, jadi struk yang seluruh item-nya void
+ * akan tetap muncul di laporan dengan benar tanpa perlu status flip.
  */
-import { eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { z } from "zod";
 import { db, schema } from "@/server/db/client";
 import { requireRole, requireSession } from "@/server/auth/session";
@@ -26,10 +25,6 @@ import { logAudit } from "@/server/api/audit";
 type Ctx = { params: Promise<{ id: string }> };
 
 const Input = z.object({
-  // Free-form POS input. min(1) menolak string kosong; max(500) menjadi
-  // safety cap supaya kasir yang nge-paste log error / paragraph panjang
-  // tidak meledakkan UI tabel laporan. Trim di server supaya whitespace-only
-  // input ditolak.
   reason: z
     .string()
     .trim()
@@ -40,10 +35,6 @@ const Input = z.object({
 export async function POST(req: Request, { params }: Ctx) {
   return handle(async () => {
     const session = await requireSession();
-    // Void datang dari POS (kasir / kepala_toko / owner). Kasir butuh akses
-    // supaya bisa flag staff-error langsung tanpa harus tunggu kepala toko.
-    // Audit log mencatat siapa yang void supaya owner bisa review pola yang
-    // mencurigakan di laporan Void.
     requireRole(session, ["owner", "kepala_toko", "kasir"]);
     const { id } = await params;
     const tx = await db
@@ -52,7 +43,6 @@ export async function POST(req: Request, { params }: Ctx) {
       .where(eq(schema.transactions.id, id))
       .get();
     if (!tx) notFound("Transaction");
-    // Cross-outlet guard: non-owner tidak boleh void transaksi outlet lain.
     if (
       session.domainUser.role !== "owner" &&
       session.domainUser.outlet_id &&
@@ -60,20 +50,42 @@ export async function POST(req: Request, { params }: Ctx) {
     ) {
       notFound("Transaction");
     }
-    if (tx.status === "void") badRequest("Transaction sudah void");
     if (tx.status !== "paid")
       badRequest("Hanya transaksi 'paid' yang bisa di-void");
 
     const { reason } = await readJson(req, Input);
-    await db
-      .update(schema.transactions)
-      .set({
-        status: "void",
-        void_reason: reason,
-        voided_by: session.domainUser.id,
-        voided_at: nowIso(),
+    const now = nowIso();
+
+    // Cek item aktif (yang belum di-void). Kalau semuanya sudah di-void via
+    // per-item endpoint sebelumnya, tolak — tidak ada yang bisa di-void lagi.
+    const remaining = await db
+      .select({
+        id: schema.transaction_items.id,
+        voided_at: schema.transaction_items.voided_at,
       })
-      .where(eq(schema.transactions.id, id));
+      .from(schema.transaction_items)
+      .where(eq(schema.transaction_items.transaction_id, id))
+      .all();
+    const activeIds = remaining
+      .filter((r) => r.voided_at === null)
+      .map((r) => r.id);
+    if (activeIds.length === 0)
+      badRequest("Tidak ada item aktif untuk di-void");
+
+    // Mark semua item yang masih aktif → voided_at = now, atribusi user + reason.
+    await db
+      .update(schema.transaction_items)
+      .set({
+        voided_at: now,
+        voided_by: session.domainUser.id,
+        void_reason: reason,
+      })
+      .where(
+        and(
+          eq(schema.transaction_items.transaction_id, id),
+          isNull(schema.transaction_items.voided_at),
+        ),
+      );
 
     await logAudit(session, {
       action: "void",
@@ -81,9 +93,9 @@ export async function POST(req: Request, { params }: Ctx) {
       entity_id: id,
       entity_name: `Transaksi #${id.slice(-6)}`,
       outlet_id: tx.outlet_id,
-      notes: `Void: ${reason}`,
+      notes: `Void seluruh struk: ${reason}`,
     });
 
-    return { ok: true };
+    return { ok: true, voided_count: activeIds.length };
   });
 }

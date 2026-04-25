@@ -129,6 +129,22 @@ async function main() {
     })),
   );
 
+  console.log("[seed] creating Better Auth identities + POS PINs…");
+  const ctx = await auth.$context;
+  const hash = ctx.password.hash;
+
+  // Random 4-digit PIN per user. Plaintext disimpan di memory cuma untuk
+  // di-print di akhir seed — di DB cuma hash. Owner nanti akan rotate via
+  // backoffice (`PUT /api/users/:id/pos-pin`).
+  const pinByUser = new Map<string, string>();
+  for (const u of data.users) {
+    pinByUser.set(u.id, String(Math.floor(1000 + Math.random() * 9000)));
+  }
+  const pinHashByUser = new Map<string, string>();
+  for (const u of data.users) {
+    pinHashByUser.set(u.id, await hash(pinByUser.get(u.id)!));
+  }
+
   console.log("[seed] inserting users…");
   await bulkInsert(
     schema.users,
@@ -140,12 +156,9 @@ async function main() {
       contact: u.contact ?? null,
       is_active: u.is_active,
       joined_at: u.joined_at,
+      pos_pin_hash: pinHashByUser.get(u.id) ?? null,
     })),
   );
-
-  console.log("[seed] creating Better Auth identities…");
-  const ctx = await auth.$context;
-  const hash = ctx.password.hash;
   const now = new Date();
   // Hash passwords in parallel — bcrypt-ish work is CPU-bound and small (≈7 users).
   const authRows = await Promise.all(
@@ -504,6 +517,14 @@ async function main() {
   console.log("[seed] ✓ done. Demo password for every user: 'password'.");
   console.log("[seed]   email format: <name-slug>@allee.local");
   console.log("[seed]   example: budi@allee.local / password");
+  console.log("");
+  console.log("[seed] POS PINs (random per seed run, plaintext below):");
+  console.log("[seed]   Owner bisa rotate PIN via UI Backoffice → Users → Edit PIN POS.");
+  for (const u of data.users) {
+    const pin = pinByUser.get(u.id);
+    if (!pin) continue;
+    console.log(`[seed]   ${u.name.padEnd(20)} (${u.role.padEnd(13)}) → ${pin}`);
+  }
 }
 
 main()

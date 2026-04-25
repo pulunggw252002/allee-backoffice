@@ -1,6 +1,10 @@
 /**
  * GET /api/reports/daily-series?outlet_id=&start=&end=
  * One point per day in the window: { date, revenue, hpp, profit, count }.
+ *
+ * Per-item void aware: item dengan `voided_at !== null` di-skip dari revenue
+ * & HPP. Revenue per tx = (Σ active_item.subtotal) − tx.discount_total
+ * (kalau masih ada item aktif; kalau seluruh struk void, revenue tx = 0).
  */
 import { eq, and, inArray } from "drizzle-orm";
 import { db, schema } from "@/server/db/client";
@@ -36,6 +40,21 @@ export async function GET(req: Request) {
               ),
             )
             .all();
+    const activeItems = items.filter((i) => i.voided_at === null);
+
+    // Pre-bucket subtotal & hpp per tx dari item aktif.
+    const subByTx = new Map<string, number>();
+    const hppByTx = new Map<string, number>();
+    for (const i of activeItems) {
+      subByTx.set(
+        i.transaction_id,
+        (subByTx.get(i.transaction_id) ?? 0) + i.subtotal,
+      );
+      hppByTx.set(
+        i.transaction_id,
+        (hppByTx.get(i.transaction_id) ?? 0) + i.hpp_snapshot * i.quantity,
+      );
+    }
 
     const byDay = new Map<
       string,
@@ -50,15 +69,11 @@ export async function GET(req: Request) {
         profit: 0,
         count: 0,
       };
-      row.revenue += t.subtotal - t.discount_total;
+      const sub = subByTx.get(t.id) ?? 0;
+      row.revenue += sub > 0 ? sub - t.discount_total : 0;
+      row.hpp += hppByTx.get(t.id) ?? 0;
       row.count += 1;
       byDay.set(date, row);
-    }
-    for (const i of items) {
-      const tx = txs.find((t) => t.id === i.transaction_id);
-      if (!tx) continue;
-      const row = byDay.get(tx.created_at.slice(0, 10));
-      if (row) row.hpp += i.hpp_snapshot * i.quantity;
     }
     for (const row of byDay.values()) row.profit = row.revenue - row.hpp;
 

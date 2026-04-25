@@ -1,12 +1,16 @@
 /**
  * GET /api/reports/payment-breakdown?outlet_id=&start=&end=
- * Count + net sales per payment method for paid tx.
+ * Count + net sales per payment method untuk paid tx (per-item void aware).
  */
 import { and, eq } from "drizzle-orm";
 import { db, schema } from "@/server/db/client";
 import { requireSession } from "@/server/auth/session";
 import { handle } from "@/server/api/helpers";
-import { readReportParams, txWhereClauses } from "@/server/api/report-shared";
+import {
+  loadNetByTx,
+  readReportParams,
+  txWhereClauses,
+} from "@/server/api/report-shared";
 
 export async function GET(req: Request) {
   return handle(async () => {
@@ -21,6 +25,7 @@ export async function GET(req: Request) {
       .from(schema.transactions)
       .where(wherePaid)
       .all();
+    const netMap = await loadNetByTx(rows);
 
     const map = new Map<
       string,
@@ -33,7 +38,7 @@ export async function GET(req: Request) {
         amount: 0,
       };
       row.count += 1;
-      row.amount += t.subtotal - t.discount_total;
+      row.amount += netMap.get(t.id) ?? 0;
       map.set(t.payment_method, row);
     }
     return Array.from(map.values()).sort((a, b) => b.amount - a.amount);

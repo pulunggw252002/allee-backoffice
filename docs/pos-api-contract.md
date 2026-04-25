@@ -84,6 +84,12 @@ menukar PIN jadi session. Sebelum endpoint itu dibuat, POS pakai jalur 2.1.
 lalu issue session via `auth.api.signIn` internal. Beri rate-limit per IP
 (brute-force PIN 4 digit cuma 10k kombinasi).
 
+**Seed bootstrap:** `npm run db:seed` sekarang men-generate random 4-digit
+PIN per user dan print plaintext-nya di console output (lihat sample log
+di bagian akhir log). PIN ini cuma untuk smoke-test POS app — owner harus
+rotate via UI Backoffice → Users → "Edit PIN POS" sebelum produksi. PIN
+plaintext **tidak** disimpan di mana pun selain log run seed.
+
 ### 2.3. Sign-out
 ```http
 POST /api/auth/sign-out
@@ -367,19 +373,50 @@ Shape sama dengan `GET /api/transactions/:id` — full transaction + items
 - Diskon, PPN, service charge: dihitung POS, dikirim sebagai field literal.
   Tidak ada server-side recompute.
 
-### 4.2. `POST /api/transactions/:id/void`
-Tandai transaksi `paid` jadi `void` (kesalahan staff: order keluar, stok
-sudah ke-deduct, tapi customer tolak). Tidak revert stok — itu masuk
-laporan kerugian operasional.
+### 4.2. Void
 
+**Granularity baru (April 2026): per-item, bukan per-struk.** Kasir bisa
+void satu menu spesifik (mis. salah racik latte) tanpa membatalkan
+seluruh struk — sisa item tetap terhitung sebagai revenue. Stok TIDAK
+direstore: bahan sudah dipakai → masuk laporan kerugian operasional
+(`reports/void-by-menu`, `reports/void-by-staff`, dst).
+
+Body untuk kedua endpoint:
 ```json
-{ "reason": "Salah menu — pelanggan minta dingin tapi disajikan panas" }
+{ "reason": "Salah racik — pelanggan minta less sugar" }
 ```
-Trim + min 1 char, max 500. Hanya status `paid` yang bisa di-void; `void`
-ke `void` lagi → 400. Cross-outlet guard: non-owner hanya boleh void
-transaksi outlet sendiri (selain itu 404 untuk privacy).
+Trim + min 1 char, max 500. Bisa template ATAU komentar bebas. Cross-outlet
+guard: non-owner cuma boleh void transaksi outlet sendiri (selain itu 404
+untuk privacy). Hanya transaksi `status === "paid"` yang bisa di-void.
 
-Response: `{ "ok": true }`.
+#### 4.2.a. `POST /api/transactions/:id/items/:itemId/void` *(utama)*
+Void satu item di struk. Idempotent guard: kalau item sudah pernah
+di-void, balikin 400 (`"Item sudah di-void sebelumnya"`) supaya atribusi
+user/reason yang asli tidak ketimpa.
+
+Response:
+```json
+{ "ok": true, "item_id": "ti_xxx", "voided_at": "2026-04-25T10:23:45.000Z" }
+```
+
+`transactions.status` tetap `"paid"` setelah void per-item — laporan Void
+mengambil dari `transaction_items.voided_at`, bukan status flip. Berarti
+revenue di laporan = Σ subtotal item aktif − discount_total per tx
+(otomatis exclude item ter-void).
+
+#### 4.2.b. `POST /api/transactions/:id/void` *(shortcut)*
+Convenience untuk "void seluruh struk" — equivalen dengan N call ke
+4.2.a dengan reason yang sama. Berguna saat kasir memang mau buang seluruh
+order (mis. customer batal sebelum minum apapun).
+
+Response:
+```json
+{ "ok": true, "voided_count": 3 }
+```
+
+`voided_count` = jumlah item yang baru saja di-void di call ini (item yang
+sebelumnya sudah voided di-skip). Kalau semua item sudah voided sebelumnya
+→ 400 (`"Tidak ada item aktif untuk di-void"`).
 
 ### 4.3. `GET /api/transactions/:id` & `GET /api/transactions`
 Untuk POS yang ingin re-fetch (mis. user buka history shift), gunakan:
@@ -406,7 +443,7 @@ mandiri. POS panggil saat tap "Mulai Shift" / "Akhiri Shift".
 | Diskon dengan jam  | Pull tiap kali kasir buka cart (cek `active_hour_start/end` realtime)  |
 | Stok bahan         | Pull setiap kali POS commit transaksi (refresh `ingredients` row)      |
 | Transaksi          | Push immediately on payment-confirm; offline queue + retry             |
-| Void               | Push immediately; user-blocking modal sampai 200/4xx                   |
+| Void item / struk  | Push immediately; user-blocking modal sampai 200/4xx                   |
 
 **Offline queue (recommended):**
 - Saat network down, POS simpan transaksi di local DB (SQLite/IndexedDB)
@@ -425,14 +462,14 @@ Saat traffic besar, tambah caching layer (`ETag` per resource, 304 reply)
 
 ## 6. RBAC Snapshot (untuk POS UI gating)
 
-| Role         | Scope outlet  | Bisa POST `/transactions` | Bisa POST `/void` |
-|--------------|---------------|---------------------------|-------------------|
-| owner        | semua         | ya                        | ya                |
-| kepala_toko  | outlet sendiri| ya                        | ya                |
-| kasir        | outlet sendiri| ya                        | ya                |
-| barista      | outlet sendiri| **tidak** (403)           | tidak             |
-| kitchen      | outlet sendiri| tidak                     | tidak             |
-| waiters      | outlet sendiri| tidak                     | tidak             |
+| Role         | Scope outlet  | POST `/transactions` | Void item / struk |
+|--------------|---------------|----------------------|-------------------|
+| owner        | semua         | ya                   | ya                |
+| kepala_toko  | outlet sendiri| ya                   | ya                |
+| kasir        | outlet sendiri| ya                   | ya                |
+| barista      | outlet sendiri| **tidak** (403)      | tidak             |
+| kitchen      | outlet sendiri| tidak                | tidak             |
+| waiters      | outlet sendiri| tidak                | tidak             |
 
 POS halaman cashier gate akses ke role ∈ {owner, kepala_toko, kasir}.
 Role lain hanya boleh KDS / order-taking client (out of scope dokumen ini).

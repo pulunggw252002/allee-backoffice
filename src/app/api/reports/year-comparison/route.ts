@@ -1,12 +1,13 @@
 /**
  * GET /api/reports/year-comparison?outlet_id=&year=2025
- * Month-by-month net sales (paid − discount) for `year` vs `year - 1`.
- * Used by the side-by-side YoY bar chart on the dashboard.
+ * Net sales per bulan untuk `year` vs `year - 1` (per-item void aware).
+ * Dipakai oleh chart YoY side-by-side di dashboard.
  */
 import { and, eq, gte, lte } from "drizzle-orm";
 import { db, schema } from "@/server/db/client";
 import { requireSession, scopedOutletId } from "@/server/auth/session";
 import { handle } from "@/server/api/helpers";
+import { loadNetByTx } from "@/server/api/report-shared";
 
 const MONTH_SHORT_ID = [
   "Jan",
@@ -47,7 +48,8 @@ export async function GET(req: Request) {
         .from(schema.transactions)
         .where(and(...conds))
         .all();
-      return rows.reduce((s, t) => s + t.subtotal - t.discount_total, 0);
+      const netMap = await loadNetByTx(rows);
+      return rows.reduce((s, t) => s + (netMap.get(t.id) ?? 0), 0);
     }
 
     const months: Array<{

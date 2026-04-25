@@ -1,13 +1,14 @@
 /**
  * GET /api/reports/monthly-target?outlet_id=&year=2025
- * For each month 1..12 of the requested year:
- *   - target_amount from `sales_targets` (0 if no target set)
- *   - actual = sum(subtotal - discount_total) of paid transactions
+ * Per-bulan (1..12) di tahun yang diminta:
+ *   - target_amount dari `sales_targets` (0 kalau belum di-set)
+ *   - actual = Σ net per tx dari paid transactions (per-item void aware)
  */
 import { and, eq, gte, lte } from "drizzle-orm";
 import { db, schema } from "@/server/db/client";
 import { requireSession, scopedOutletId } from "@/server/auth/session";
 import { handle } from "@/server/api/helpers";
+import { loadNetByTx } from "@/server/api/report-shared";
 
 export async function GET(req: Request) {
   return handle(async () => {
@@ -40,10 +41,8 @@ export async function GET(req: Request) {
         .from(schema.transactions)
         .where(and(...conds))
         .all();
-      const actual = rows.reduce(
-        (s, t) => s + t.subtotal - t.discount_total,
-        0,
-      );
+      const netMap = await loadNetByTx(rows);
+      const actual = rows.reduce((s, t) => s + (netMap.get(t.id) ?? 0), 0);
       result.push({ month: m, target: targetMap.get(m) ?? 0, actual });
     }
     return result;

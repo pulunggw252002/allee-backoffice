@@ -4,6 +4,7 @@ import type {
   OrderType,
   PaymentMethod,
   Transaction,
+  TransactionItem,
   TransactionStatus,
 } from "@/types";
 import { delay } from "./_latency";
@@ -31,10 +32,6 @@ function isCanceled(t: Transaction) {
 function isOpen(t: Transaction) {
   return t.status === "open";
 }
-function isVoid(t: Transaction) {
-  return t.status === "void";
-}
-
 /** Sum HPP of all items in a transaction (cost of goods actually made). */
 function txHpp(t: Transaction) {
   return t.items.reduce((s, it) => s + it.hpp_snapshot * it.quantity, 0);
@@ -48,6 +45,65 @@ function txUnits(t: Transaction) {
 /** Net value of a single paid transaction = subtotal − discount. */
 function txNet(t: Transaction) {
   return t.subtotal - t.discount_total;
+}
+
+/**
+ * Apakah satu item dianggap void.
+ *
+ * Granularity baru (April 2026): per-item via `it.voided_at`. Untuk data
+ * lama (legacy seed atau tx pre-migrasi) masih ada `tx.voided_at` di tx
+ * level — kita honor itu juga supaya struk lama tetap terhitung void di
+ * laporan.
+ */
+function isItemVoid(t: Transaction, it: TransactionItem): boolean {
+  if (it.voided_at) return true;
+  if (t.voided_at) return true;
+  return false;
+}
+
+interface VoidedItemCtx {
+  tx: Transaction;
+  item: TransactionItem;
+  /** ISO timestamp efektif untuk laporan (per-item kalau ada, fallback ke tx-level). */
+  voided_at: string;
+  voided_by: string | null;
+  reason: string | null;
+}
+
+/**
+ * Flatten semua item ter-void di satu list transaksi, lengkap dengan parent
+ * tx context (outlet, created_at). Honor baik per-item void (baru) maupun
+ * tx-level void (legacy) dengan precedence per-item.
+ */
+function voidedItemsWithCtx(txs: Transaction[]): VoidedItemCtx[] {
+  const out: VoidedItemCtx[] = [];
+  for (const tx of txs) {
+    for (const item of tx.items) {
+      if (item.voided_at) {
+        out.push({
+          tx,
+          item,
+          voided_at: item.voided_at,
+          voided_by: item.voided_by ?? null,
+          reason: item.void_reason ?? null,
+        });
+      } else if (tx.voided_at) {
+        out.push({
+          tx,
+          item,
+          voided_at: tx.voided_at,
+          voided_by: tx.voided_by ?? null,
+          reason: tx.void_reason ?? null,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/** HPP loss dari satu void item (snapshot HPP × quantity). */
+function itemHpp(it: TransactionItem): number {
+  return it.hpp_snapshot * it.quantity;
 }
 
 export interface SalesSummary {
@@ -546,10 +602,22 @@ export async function dashboardKpis(params: {
   const db = getDb();
   const all = filterTx(db.transactions, params);
   const paid = all.filter(isPaid);
-  const voids = all.filter(isVoid);
-  const netSales = paid.reduce((s, t) => s + txNet(t), 0);
+  // Net sales = Σ (active item subtotal) − tx.discount_total per paid tx,
+  // clamp 0 saat seluruh struk void supaya diskon tidak meninggalkan saldo
+  // negatif yang menyesatkan.
+  let netSales = 0;
+  for (const t of paid) {
+    const activeSub = t.items.reduce(
+      (a, it) => a + (isItemVoid(t, it) ? 0 : it.subtotal),
+      0,
+    );
+    netSales += activeSub > 0 ? activeSub - t.discount_total : 0;
+  }
   const avgTicket = paid.length > 0 ? netSales / paid.length : 0;
-  const voidLoss = voids.reduce((s, t) => s + txHpp(t), 0);
+  const voidedItems = voidedItemsWithCtx(all);
+  const voidLoss = voidedItems.reduce((s, v) => s + itemHpp(v.item), 0);
+  // Jumlah struk yang punya minimal 1 item void — angka headline di KPI.
+  const voidTxCount = new Set(voidedItems.map((v) => v.tx.id)).size;
   return delay({
     net_sales: netSales,
     avg_ticket: avgTicket,
@@ -558,7 +626,7 @@ export async function dashboardKpis(params: {
     canceled_count: all.filter(isCanceled).length,
     open_count: all.filter(isOpen).length,
     online_count: all.filter((t) => isPaid(t) && t.order_type === "online").length,
-    void_count: voids.length,
+    void_count: voidTxCount,
     void_loss: voidLoss,
   });
 }
@@ -880,14 +948,27 @@ export async function voidSummary(params: {
   }
   const db = getDb();
   const all = filterTx(db.transactions, params);
-  const voids = all.filter(isVoid);
   const paid = all.filter(isPaid);
-  const total_loss = voids.reduce((s, t) => s + txHpp(t), 0);
-  const item_count = voids.reduce((s, t) => s + txUnits(t), 0);
-  const denom = voids.length + paid.length;
-  const rate_percent = denom > 0 ? (voids.length / denom) * 100 : 0;
+  const voidedItems = voidedItemsWithCtx(all);
+  const item_count = voidedItems.reduce((s, v) => s + v.item.quantity, 0);
+  const total_loss = voidedItems.reduce((s, v) => s + itemHpp(v.item), 0);
+  // Unique tx yang punya minimal satu void item — dipakai untuk angka
+  // "jumlah void" di card utama (bukan "jumlah item void").
+  const voidTxCount = new Set(voidedItems.map((v) => v.tx.id)).size;
+  // Rate = void item count / total paid item count + void item count.
+  const paidItemCount = paid.reduce(
+    (s, t) =>
+      s +
+      t.items.reduce(
+        (a, it) => a + (isItemVoid(t, it) ? 0 : it.quantity),
+        0,
+      ),
+    0,
+  );
+  const denom = paidItemCount + item_count;
+  const rate_percent = denom > 0 ? (item_count / denom) * 100 : 0;
   return delay({
-    count: voids.length,
+    count: voidTxCount,
     item_count,
     total_loss,
     rate_percent,
@@ -914,11 +995,12 @@ export async function voidSeries(params: {
   const start = new Date(now);
   start.setDate(start.getDate() - days + 1);
   start.setHours(0, 0, 0, 0);
-  const voids = filterTx(db.transactions, {
+  const window = filterTx(db.transactions, {
     outlet_id: params.outlet_id,
     start: start.toISOString(),
     end: now.toISOString(),
-  }).filter(isVoid);
+  });
+  const voidedItems = voidedItemsWithCtx(window);
   const buckets = new Map<string, VoidDailyPoint>();
   for (let i = 0; i < days; i++) {
     const d = new Date(start);
@@ -926,12 +1008,14 @@ export async function voidSeries(params: {
     const key = d.toISOString().slice(0, 10);
     buckets.set(key, { date: key, count: 0, loss: 0 });
   }
-  for (const t of voids) {
-    const key = t.created_at.slice(0, 10);
+  for (const v of voidedItems) {
+    // Bucket by tx.created_at (sama dengan server) supaya sejajar dengan
+    // shift saat transaksi terjadi, bukan saat void diketuk.
+    const key = v.tx.created_at.slice(0, 10);
     const bucket = buckets.get(key);
     if (!bucket) continue;
     bucket.count += 1;
-    bucket.loss += txHpp(t);
+    bucket.loss += itemHpp(v.item);
   }
   return delay(Array.from(buckets.values()));
 }
@@ -953,21 +1037,23 @@ export async function voidByMenu(params: {
     return http.get<VoidMenuRow[]>(`/api/reports/void-by-menu${qs(params)}`);
   }
   const db = getDb();
-  const voids = filterTx(db.transactions, params).filter(isVoid);
+  const window = filterTx(db.transactions, params);
+  const voidedItems = voidedItemsWithCtx(window);
   const map = new Map<string, VoidMenuRow>();
-  for (const t of voids) {
-    for (const it of t.items) {
-      if (!it.menu_id) continue;
-      const row = map.get(it.menu_id) ?? {
-        menu_id: it.menu_id,
-        name: it.name_snapshot,
-        quantity: 0,
-        loss: 0,
-      };
-      row.quantity += it.quantity;
-      row.loss += it.hpp_snapshot * it.quantity;
-      map.set(it.menu_id, row);
-    }
+  for (const v of voidedItems) {
+    const it = v.item;
+    // Bundle di-hash dengan prefix supaya tidak collide dengan menu biasa.
+    const key = it.menu_id ?? (it.bundle_id ? `bundle:${it.bundle_id}` : null);
+    if (!key) continue;
+    const row = map.get(key) ?? {
+      menu_id: key,
+      name: it.name_snapshot,
+      quantity: 0,
+      loss: 0,
+    };
+    row.quantity += it.quantity;
+    row.loss += itemHpp(it);
+    map.set(key, row);
   }
   return delay(
     Array.from(map.values())
@@ -991,13 +1077,13 @@ export async function voidByReason(params: {
     return http.get<VoidReasonRow[]>(`/api/reports/void-by-reason${qs(params)}`);
   }
   const db = getDb();
-  const voids = filterTx(db.transactions, params).filter(isVoid);
+  const voidedItems = voidedItemsWithCtx(filterTx(db.transactions, params));
   const map = new Map<string, VoidReasonRow>();
-  for (const t of voids) {
-    const reason = t.void_reason ?? "Tanpa alasan";
+  for (const v of voidedItems) {
+    const reason = v.reason ?? "Tanpa alasan";
     const row = map.get(reason) ?? { reason, count: 0, loss: 0 };
     row.count += 1;
-    row.loss += txHpp(t);
+    row.loss += itemHpp(v.item);
     map.set(reason, row);
   }
   return delay(Array.from(map.values()).sort((a, b) => b.loss - a.loss));
@@ -1020,10 +1106,10 @@ export async function voidByStaff(params: {
     return http.get<VoidStaffRow[]>(`/api/reports/void-by-staff${qs(params)}`);
   }
   const db = getDb();
-  const voids = filterTx(db.transactions, params).filter(isVoid);
+  const voidedItems = voidedItemsWithCtx(filterTx(db.transactions, params));
   const map = new Map<string, VoidStaffRow>();
-  for (const t of voids) {
-    const actorId = t.voided_by ?? t.user_id;
+  for (const v of voidedItems) {
+    const actorId = v.voided_by ?? v.tx.user_id;
     if (!actorId) continue;
     const user = db.users.find((u) => u.id === actorId);
     const row = map.get(actorId) ?? {
@@ -1032,8 +1118,10 @@ export async function voidByStaff(params: {
       count: 0,
       loss: 0,
     };
+    // Count = jumlah ITEM ter-void (bukan jumlah struk) — konsisten dengan
+    // semantik baru "jumlah void" = jumlah menu/item yang di-void.
     row.count += 1;
-    row.loss += txHpp(t);
+    row.loss += itemHpp(v.item);
     map.set(actorId, row);
   }
   return delay(
@@ -1066,33 +1154,33 @@ export async function voidList(params: {
     return http.get<VoidRow[]>(`/api/reports/void-list${qs(params)}`);
   }
   const db = getDb();
-  const voids = filterTx(db.transactions, params).filter(isVoid);
-  const rows: VoidRow[] = voids
+  const voidedItems = voidedItemsWithCtx(filterTx(db.transactions, params));
+  const rows: VoidRow[] = voidedItems
     .slice()
-    .sort(
-      (a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
-    )
-    .map((t) => {
-      const outlet = db.outlets.find((o) => o.id === t.outlet_id);
-      const actorId = t.voided_by ?? t.user_id;
+    .sort((a, b) => b.voided_at.localeCompare(a.voided_at))
+    .map((v) => {
+      const outlet = db.outlets.find((o) => o.id === v.tx.outlet_id);
+      const actorId = v.voided_by ?? v.tx.user_id;
       const user = actorId
         ? db.users.find((u) => u.id === actorId)
         : undefined;
-      const names = t.items.map(
-        (it) => `${it.name_snapshot}${it.quantity > 1 ? ` × ${it.quantity}` : ""}`,
-      );
+      const label =
+        v.item.quantity > 1
+          ? `${v.item.name_snapshot} × ${v.item.quantity}`
+          : v.item.name_snapshot;
       return {
-        id: t.id,
-        created_at: t.created_at,
-        outlet_id: t.outlet_id,
-        outlet_name: outlet?.name ?? t.outlet_id,
+        // `id` = item id supaya React key tidak duplikat saat 1 struk punya
+        // beberapa item void.
+        id: v.item.id,
+        created_at: v.voided_at,
+        outlet_id: v.tx.outlet_id,
+        outlet_name: outlet?.name ?? v.tx.outlet_id,
         user_id: actorId ?? "",
         user_name: user?.name ?? "Staff tidak dikenal",
-        reason: t.void_reason ?? "Tanpa alasan",
-        items_label: names.join(", "),
-        item_count: txUnits(t),
-        loss: txHpp(t),
+        reason: v.reason ?? "Tanpa alasan",
+        items_label: label,
+        item_count: v.item.quantity,
+        loss: itemHpp(v.item),
       };
     });
   const limit = params.limit ?? rows.length;

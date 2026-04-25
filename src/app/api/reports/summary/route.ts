@@ -1,9 +1,11 @@
 /**
  * GET /api/reports/summary?outlet_id=&start=&end=
- * Aggregate sales figures for paid transactions only.
  *
- * `revenue` is gross (sum of item subtotals pre-discount). `profit` follows
- * `revenue − hpp − discount` — same semantics as the frontend mock.
+ * Aggregate sales figures for paid transactions only. Per-item void aware:
+ * item dengan `voided_at !== null` di-exclude dari revenue & HPP.
+ *
+ * `revenue` adalah gross subtotal dari item aktif (sebelum discount). `profit`
+ * mengikuti `revenue − hpp − discount` (sama dengan semantik mock frontend).
  */
 import { and, eq, inArray } from "drizzle-orm";
 import { db, schema } from "@/server/db/client";
@@ -47,16 +49,20 @@ export async function GET(req: Request) {
       .from(schema.transaction_items)
       .where(inArray(schema.transaction_items.transaction_id, txIds))
       .all();
+    const activeItems = allItems.filter((i) => i.voided_at === null);
 
-    const revenue = txs.reduce((s, t) => s + t.subtotal, 0);
-    const hpp = allItems.reduce((s, i) => s + i.hpp_snapshot * i.quantity, 0);
+    // Revenue = Σ active_item.subtotal (per-item, sudah skip yang void).
+    // discount/PPN/service tetap dijumlahkan dari tx-level — operator sudah
+    // membayar/mencatat angka itu utuh; void hanya mengurangi gross subtotal.
+    const revenue = activeItems.reduce((s, i) => s + i.subtotal, 0);
+    const hpp = activeItems.reduce((s, i) => s + i.hpp_snapshot * i.quantity, 0);
     const discount = txs.reduce((s, t) => s + t.discount_total, 0);
     const ppn = txs.reduce((s, t) => s + t.ppn_amount, 0);
     const service_charge = txs.reduce(
       (s, t) => s + t.service_charge_amount,
       0,
     );
-    const item_count = allItems.reduce((s, i) => s + i.quantity, 0);
+    const item_count = activeItems.reduce((s, i) => s + i.quantity, 0);
     const profit = revenue - hpp - discount;
 
     return {

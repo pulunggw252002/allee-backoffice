@@ -15,6 +15,13 @@
       "when": 1777010526493,
       "tag": "0001_certain_dragon_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1777090454490,
+      "tag": "0002_tx_item_void",
+      "breakpoints": true
     }
   ]
 }

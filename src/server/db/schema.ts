@@ -321,6 +321,15 @@ export const transaction_items = sqliteTable("transaction_items", {
   unit_price: real("unit_price").notNull().default(0),
   hpp_snapshot: real("hpp_snapshot").notNull().default(0),
   subtotal: real("subtotal").notNull().default(0),
+  // Per-item void (granularity: satu menu di dalam struk).
+  // Set saat kasir tandai item ini gagal di POS — sisa struk tetap valid revenue.
+  // Stok TIDAK dikembalikan: bahan sudah dipakai → dihitung sebagai kerugian
+  // operasional. Laporan Void agregasi by `menu_id` dari kolom ini.
+  // Tx-level void columns (`transactions.void_*`) di-deprecated untuk data
+  // baru; masih dibaca untuk backward-compat dengan data lama.
+  voided_at: text("voided_at"),
+  voided_by: text("voided_by"),
+  void_reason: text("void_reason"),
 });
 
 export const transaction_item_addons = sqliteTable("transaction_item_addons", {

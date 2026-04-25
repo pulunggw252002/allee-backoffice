@@ -7,7 +7,6 @@ import { useAuthStore } from "@/stores/auth-store";
 import { useOutletStore } from "@/stores/outlet-store";
 import { PageHeader } from "@/components/shared/page-header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -295,7 +294,14 @@ export default function VoidReportPage() {
                 ) : (
                   byReason.map((row) => (
                     <TableRow key={row.reason}>
-                      <TableCell className="text-sm">{row.reason}</TableCell>
+                      <TableCell className="max-w-[320px]">
+                        <p
+                          className="whitespace-pre-wrap break-words text-sm leading-relaxed"
+                          title={row.reason}
+                        >
+                          {row.reason}
+                        </p>
+                      </TableCell>
                       <TableCell className="text-right tabular">
                         {formatNumber(row.count)}
                       </TableCell>
@@ -395,10 +401,20 @@ export default function VoidReportPage() {
                     <TableCell className="text-xs">{r.outlet_name}</TableCell>
                     <TableCell className="text-xs">{r.user_name}</TableCell>
                     <TableCell className="text-xs">{r.items_label}</TableCell>
-                    <TableCell>
-                      <Badge variant="danger" className="text-[10px]">
+                    <TableCell className="max-w-[280px]">
+                      {/*
+                       * Free-form reason yang ditulis kasir di POS — bisa
+                       * pendek seperti "Salah menu" atau panjang seperti
+                       * "Pelanggan ganti pesanan jadi minuman dingin".
+                       * Tampilkan apa adanya dengan word-wrap supaya konteks
+                       * dari operator tidak hilang.
+                       */}
+                      <p
+                        className="whitespace-pre-wrap break-words text-xs leading-relaxed text-foreground"
+                        title={r.reason}
+                      >
                         {r.reason}
-                      </Badge>
+                      </p>
                     </TableCell>
                     {canSeeCost ? (
                       <TableCell className="text-right tabular text-red-600">

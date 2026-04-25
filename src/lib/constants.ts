@@ -73,12 +73,19 @@ export const TRANSACTION_STATUS_LABEL: Record<TransactionStatus, string> = {
 };
 
 /**
- * Daftar alasan yang umum dipilih saat staff melakukan void order. Dipakai
- * oleh laporan Void (group-by reason) dan oleh mock seed untuk menghasilkan
- * data realistis. Kalau backend punya endpoint `GET /void-reasons` di masa
- * depan, list ini cukup digantikan oleh hasil fetch tanpa mengubah UI.
+ * SEED-ONLY void reason templates.
+ *
+ * Real void reasons di production datang dari **input bebas kasir di POS** —
+ * boleh berupa pilihan template seperti di list ini, ATAU komentar bebas yang
+ * dia ketik sendiri (mis. "Pelanggan ganti pesanan jadi minuman dingin").
+ * Backend menyimpan `void_reason` sebagai free-form text, dan laporan void
+ * menampilkannya apa adanya supaya konteks asli operator tetap utuh.
+ *
+ * List ini dipakai HANYA oleh `src/lib/mock/seed.ts` untuk menghasilkan
+ * transaksi void demo yang realistis. UI backoffice tidak boleh menampilkan
+ * dropdown alasan dari list ini — semua flow void harus lewat POS.
  */
-export const VOID_REASONS: readonly string[] = [
+export const VOID_REASONS_SEED: readonly string[] = [
   "Salah menu",
   "Salah isi / topping",
   "Salah input kasir",
@@ -86,6 +93,23 @@ export const VOID_REASONS: readonly string[] = [
   "Pesanan tidak diambil pelanggan",
   "Kesalahan peracikan",
   "Rasa / kualitas tidak sesuai",
+];
+
+/**
+ * SEED-ONLY contoh komentar bebas yang biasanya diketik kasir di POS saat
+ * alasan tidak cukup direpresentasikan oleh template. Dicampur dengan
+ * `VOID_REASONS_SEED` di seed untuk membuat laporan demo terlihat seperti
+ * data produksi (campur template + komentar manual).
+ */
+export const VOID_FREEFORM_SAMPLES_SEED: readonly string[] = [
+  "Pelanggan tiba-tiba ganti pesanan jadi minuman dingin",
+  "Gelas pecah waktu serving, harus diulang",
+  "Mesin espresso error mid-brew",
+  "Pelanggan complain rasa terlalu manis, minta dibuang",
+  "Salah racik — barista kasih full sugar padahal request no sugar",
+  "Pesanan ganda gara-gara struk pertama hilang",
+  "Bahan habis (susu) di tengah-tengah, terpaksa di-void",
+  "Pelanggan pergi sebelum order selesai dibuat",
 ];
 
 /**

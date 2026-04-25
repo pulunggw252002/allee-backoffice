@@ -5,6 +5,16 @@
  * terpotong, tapi pelanggan menolak). Flipping status to "void" removes the
  * revenue from sales reports while keeping the stock movement + HPP in place
  * as an operational loss — matches the frontend void-report semantics.
+ *
+ * `reason` adalah free-form string yang diinput operator di POS — bisa berupa
+ * pilihan template (mis. "Salah menu") ATAU komentar bebas yang dia ketik
+ * sendiri (mis. "Pelanggan tiba-tiba ganti pesanan jadi minuman dingin"). DB
+ * menyimpan apa pun yang dikirim apa adanya supaya laporan void mencerminkan
+ * konteks asli dari kasir, bukan bucket enum yang membatasi nuance.
+ *
+ * Backoffice tidak memanggil endpoint ini sendiri — semua void berasal dari
+ * POS. Endpoint ini ada di backoffice supaya POS punya satu sumber backend
+ * yang sama untuk audit & report.
  */
 import { eq } from "drizzle-orm";
 import { z } from "zod";
@@ -16,7 +26,15 @@ import { logAudit } from "@/server/api/audit";
 type Ctx = { params: Promise<{ id: string }> };
 
 const Input = z.object({
-  reason: z.string().min(1),
+  // Free-form POS input. min(1) menolak string kosong; max(500) menjadi
+  // safety cap supaya kasir yang nge-paste log error / paragraph panjang
+  // tidak meledakkan UI tabel laporan. Trim di server supaya whitespace-only
+  // input ditolak.
+  reason: z
+    .string()
+    .trim()
+    .min(1, "Alasan void wajib diisi")
+    .max(500, "Alasan terlalu panjang (max 500 karakter)"),
 });
 
 export async function POST(req: Request, { params }: Ctx) {

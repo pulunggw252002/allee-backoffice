@@ -35,7 +35,8 @@ import {
   MOCK_DISCOUNT_RATE,
   MOCK_SEED_HISTORY_DAYS,
   MOCK_VOID_PROBABILITY,
-  VOID_REASONS,
+  VOID_FREEFORM_SAMPLES_SEED,
+  VOID_REASONS_SEED,
 } from "@/lib/constants";
 
 /**
@@ -736,8 +737,17 @@ function buildTransactions(): {
         })();
 
         const isVoid = status === "void";
+        // Mimic POS reality: kasir kadang pilih template (~70%) dan kadang
+        // ngetik komentar bebas (~30%). Ini bikin laporan demo punya campuran
+        // string panjang dan pendek seperti data produksi.
         const voidReason = isVoid
-          ? VOID_REASONS[Math.floor(Math.random() * VOID_REASONS.length)]
+          ? Math.random() < 0.7
+            ? VOID_REASONS_SEED[
+                Math.floor(Math.random() * VOID_REASONS_SEED.length)
+              ]
+            : VOID_FREEFORM_SAMPLES_SEED[
+                Math.floor(Math.random() * VOID_FREEFORM_SAMPLES_SEED.length)
+              ]
           : undefined;
         const voidedBy = isVoid ? cashierByOutlet[outlet.id] : undefined;
         const voidedAt = isVoid

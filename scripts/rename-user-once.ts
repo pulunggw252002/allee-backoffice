@@ -20,6 +20,7 @@
 import "./_env";
 import { client } from "../src/server/db/client";
 import { emailFromName } from "../src/lib/auth-email";
+import type { InStatement } from "@libsql/client";
 
 const TARGET_NAME = "POS Renon Servicer";
 const SOURCE_NAMES = ["POS Dago Service", "POS Renon Service"];
@@ -69,7 +70,7 @@ async function main() {
   }
 
   const now = Date.now();
-  const stmts: { sql: string; args: unknown[] }[] = [
+  const stmts: InStatement[] = [
     { sql: "UPDATE users SET name = ? WHERE id = ?", args: [TARGET_NAME, userId] },
   ];
   if (authId) {
